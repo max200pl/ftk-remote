@@ -382,6 +382,11 @@ function Checkout-Branch([string]$d, [string]$b) {
     Say "branch: $(& git -C $d rev-parse --abbrev-ref HEAD)"
     return $true
 }
+function Fix-Owner([string]$path) {   # an elevated run creates Administrators-owned files; git then refuses them for the user
+    if (-not $IsWin -or -not (Test-Path -LiteralPath $path)) { return }
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe $path /setowner $me /T /C /Q 2>&1 | Out-Null
+}
 function Xfer-Path([string]$b64) {
     $r = B64Dec $b64
     if (-not $r -or $r -notmatch '^[A-Za-z0-9._/-]+$' -or $r.StartsWith('/') -or $r.Contains('..')) { return '' }
@@ -595,6 +600,7 @@ switch ($cmd) {
             & git -C $base worktree add -q --no-track -b $b $wt $start
         }
         if ($LASTEXITCODE -ne 0) { exit 1 }
+        Fix-Owner $wt
         Write-Output "worktree: $wt (branch $b)"
     }
     Write-Utf8 (Join-Path $FTK "project-ftk-$name") $wt
@@ -618,6 +624,7 @@ switch ($cmd) {
         if ($LASTEXITCODE -ne 0) { exit 1 }
         if ($br -and -not $onRemote -and -not (Checkout-Branch $dir $br)) { exit 1 }
     }
+    Fix-Owner $dir
     Write-Utf8 $MainProjectFile $dir; Write-Utf8 $BaseBranchFile "$(& git -C $dir rev-parse --abbrev-ref HEAD)`n"
     Write-Output "project: $dir"; & git -C $dir log --oneline -1
 }
@@ -634,6 +641,7 @@ switch ($cmd) {
         & git -C $dest remote remove origin
         Write-Output "unpacked: $dest ($(& git -C $dest log --oneline -1))"
     }
+    Fix-Owner $dest
     Write-Utf8 $MainProjectFile $dest; Write-Utf8 $BaseBranchFile "$br`n"
     Write-Output "project: $dest"
 }
@@ -739,6 +747,12 @@ if ($provided) {
             exit 1
         }
     }
+}
+
+# the elevated setup created these as Administrators-owned: hand them to the user (git refuses foreign-owned repos)
+$meUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+foreach ($pth in @($FtkHome, $projects, (Join-Path $env:USERPROFILE '.claude\agents'))) {
+    if (Test-Path $pth) { & icacls.exe $pth /setowner $meUser /T /C /Q 2>&1 | Out-Null }
 }
 
 # ---------- migration files shipped with the kit ----------
