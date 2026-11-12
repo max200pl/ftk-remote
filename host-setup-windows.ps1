@@ -41,8 +41,11 @@ try { Start-Transcript -Path (Join-Path $LogDir 'setup.log') -Append | Out-Null 
 $global:FtkStep = 'start'
 function Mark([string]$name) { $global:FtkStep = $name; Write-Host "=== $name ($(Get-Date -Format HH:mm:ss))" }
 function RebootPending {
-    return ((Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
-            (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'))
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { return $true }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { return $true }
+    if (Test-Path (Join-Path $env:windir 'WinSxS\pending.xml')) { return $true }       # servicing transaction not applied yet
+    try { if ((New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired) { return $true } } catch { }
+    return $false
 }
 
 Add-Type -AssemblyName System.Windows.Forms
