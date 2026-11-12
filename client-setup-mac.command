@@ -150,6 +150,7 @@ case "$cmd" in
   show)          ssh ftk "$FTK_REMOTE show-monitor" ;;
   version)       echo "client kit $(cat "$HOME/.ftk/kit-version" 2>/dev/null || echo '?')"; printf 'host helper '; ssh ftk "$FTK_REMOTE version" ;;
   update-host)   ssh ftk "$FTK_REMOTE update" ;;
+  rollback-host) ssh ftk "$FTK_REMOTE rollback" ;;
   setup-log)     num "${1:-}"; ssh ftk "$RR setup-log ${1:-}" ;;
   wait)          num "${1:-}"; ssh ftk "$RR wait ${1:-}" ;;
   status|start|restart|git|lanes) ssh ftk "$RR $cmd" ;;
@@ -210,7 +211,8 @@ ftk xfer                   list ~/.ftk/xfer on the host
 ftk [-s LANE] setproject PATH   point the agent at a folder on the host (~/ allowed)
 ftk shell                  plain ssh to the host
 ftk version                client kit + host helper versions
-ftk update-host            update the host helper from GitHub now
+ftk update-host            update the host helper from GitHub now (signed releases only)
+ftk rollback-host          go back to the previous host helper
 ftk events [1h]            ntfy notifications: ready / turn finished / needs you
 H
   ;;

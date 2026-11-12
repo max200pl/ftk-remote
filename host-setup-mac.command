@@ -466,14 +466,24 @@ PY
     done
     echo "$n agent(s), $w working"; printf '%s' "$rows" ;;
   version) echo "$FTK_VERSION" ;;
-  update)     # update [quiet]: replace this helper with the newest version from GitHub (only if newer and valid)
-    [ -f "$FTK/no-update" ] && { [ "$2" = quiet ] || echo "updates are switched off on this host (~/.ftk/no-update)"; exit 0; }
-    tmp="$(mktemp)"
-    if ! curl -fsS -m 20 "$FTK_RAW" -o "$tmp"; then rm -f "$tmp"; [ "$2" = quiet ] || echo "update check failed"; exit 0; fi
+  update)     # update [quiet]: install a newer helper from GitHub ONLY if it is signed by the teammate's key
+    q="$2"; say() { [ "$q" = quiet ] || echo "$1"; }
+    [ -f "$FTK/no-update" ] && { say "updates are switched off on this host (~/.ftk/no-update)"; exit 0; }
+    [ -f "$FTK/allowed_signers" ] || { say "update refused: no trusted release key on this host (~/.ftk/allowed_signers)"; exit 0; }
+    tmp="$(mktemp)"; trap 'rm -f "$tmp" "$tmp.sig"' EXIT
+    if ! curl -fsS -m 20 "$FTK_RAW" -o "$tmp" || ! curl -fsS -m 20 "$FTK_RAW.sig" -o "$tmp.sig"; then say "update check failed"; exit 0; fi
+    if ! ssh-keygen -Y verify -f "$FTK/allowed_signers" -I ftk-release -n ftk-update -s "$tmp.sig" < "$tmp" >/dev/null 2>&1; then
+      echo "update REFUSED: the signature does not match the trusted release key"; exit 1; fi
     new="$(sed -n 's/^FTK_VERSION="\([0-9.]*\)".*/\1/p' "$tmp" | head -1)"
-    if [ -z "$new" ] || ! bash -n "$tmp" 2>/dev/null; then rm -f "$tmp"; [ "$2" = quiet ] || echo "update skipped: downloaded file is not a valid helper"; exit 0; fi
-    if [ "$(printf '%s\n%s\n' "$new" "$FTK_VERSION" | sort -V | tail -1)" = "$FTK_VERSION" ]; then rm -f "$tmp"; [ "$2" = quiet ] || echo "up to date ($FTK_VERSION)"; exit 0; fi
-    chmod +x "$tmp" && mv "$tmp" "$SELF" && echo "updated $FTK_VERSION -> $new" ;;
+    if [ -z "$new" ] || ! bash -n "$tmp" 2>/dev/null; then say "update skipped: downloaded file is not a valid helper"; exit 0; fi
+    if [ "$(printf '%s\n%s\n' "$new" "$FTK_VERSION" | sort -V | tail -1)" = "$FTK_VERSION" ]; then say "up to date ($FTK_VERSION)"; exit 0; fi
+    cp "$SELF" "$SELF.bak" && chmod +x "$tmp" && cp "$tmp" "$SELF" && echo "updated $FTK_VERSION -> $new (signed; previous kept for: rollback)" ;;
+  rollback)   # go back to the helper that was installed before the last update
+    [ -f "$SELF.bak" ] || { echo "nothing to roll back to"; exit 1; }
+    cp "$SELF.bak" "$SELF" && echo "rolled back to the previous helper" ;;
+  trust-signer) # trust-signer <b64 public key>: the key whose signature releases need
+    k="$(arg "${2:--}")"; [[ "$k" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[^ ]+)\ [A-Za-z0-9+/=]+ ]] || { echo "bad public key"; exit 2; }
+    mkdir -p "$FTK"; printf 'ftk-release namespaces="ftk-update" %s\n' "$(printf '%s' "$k" | cut -d' ' -f1,2)" > "$FTK/allowed_signers"; echo "release signing key trusted" ;;
   autostart)  # LaunchAgent / desktop shortcut: update quietly, start the session, show the progress window
     "$SELF" update quiet >/dev/null 2>&1
     "$SELF" start >/dev/null
@@ -496,6 +506,21 @@ PY
 esac
 FTK_REMOTE_EOF
 chmod +x "$HOME/.ftk/ftk-remote"
+"$HOME/.ftk/ftk-remote" trust-signer "$(printf '%s' "$KEY" | base64 | tr -d '\n')" >/dev/null   # helper updates must be signed with this key
+# optional: keys only for SSH on this Mac (Remote Login allows passwords by default)
+ANS="$(osascript - "Make SSH on this Mac key-only (no password logins)?
+
+Recommended. It changes the Mac's SSH server for everyone, and asks for your Mac password once (sudo)." "$TITLE" "Not now" "Yes" <<'OSA' 2>/dev/null
+on run argv
+  button returned of (display dialog (item 1 of argv) with title (item 2 of argv) buttons {item 3 of argv, item 4 of argv} default button (item 4 of argv))
+end run
+OSA
+)"
+if [ "$ANS" = "Yes" ]; then
+  printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' | sudo tee /etc/ssh/sshd_config.d/100-ftk-keys-only.conf >/dev/null &&
+    echo "SSH: password logins switched off (keys only)"
+fi
+
 # ---------- the connection is ready: tell the teammate NOW ----------
 LINE="FTK|$TS_IP|$(whoami)|mac"
 printf '%s' "$LINE" | pbcopy

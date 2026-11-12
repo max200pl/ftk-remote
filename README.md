@@ -126,6 +126,18 @@ ftk new-lane a1 migrate/s2-a1        # cut from local v2 when there is no origin
 ### Permissions
 Nothing is auto-approved. The host can add an allowlist to the project's `.claude/settings.local.json` (see START-HERE.md).
 
+## Security model
+- **Who can get in:** only through Tailscale (the host shares one machine), and only with the SSH key from `teammate.pub`.
+  - Windows: the SSH server is key-only (passwords off), and port 22 is open to Tailscale addresses only.
+  - Mac: the setup offers to make SSH key-only (sudo).
+- **What the agents may do:** normal Claude Code permissions; nothing is auto-approved and `--dangerously-skip-permissions` is never used. On Windows, allow tools in `.claude/settings.local.json`.
+- **Branches:** the clone is single-branch. `migrate/operator-records` is refused everywhere, and every argument to the helper is a plain word or base64 (no shell injection).
+- **Updates are signed:**
+  - A host installs a newer helper only if `ftk-remote.{sh,ps1}.sig` verifies (`ssh-keygen -Y verify`) against the release key it trusts. That is the teammate key, written to `~/.ftk/allowed_signers` at setup. Access to the GitHub repo alone is **not** enough to push code to a host.
+  - Release with `./release.sh <version>`: it runs the tests, bumps the version, signs and commits. A host keeps the previous helper; `ftk rollback-host` restores it. `~/.ftk/no-update` on the host switches updates off.
+- **Protect the private key** `~/.ssh/ftk_ed25519`. It opens the hosts and signs releases. Give it a passphrase (`ssh-keygen -p -f ~/.ssh/ftk_ed25519`); macOS can keep it in the Keychain (`UseKeychain yes` + `AddKeysToAgent yes` in `~/.ssh/config`). Also turn on 2FA on GitHub and protect `main` there.
+- **ntfy:** the topic name is the only secret. Messages contain the host's Tailscale IP, user name and step names; they cannot be used to connect from outside your tailnet.
+
 ## Troubleshooting
 - **Windows keeps saying "Restart needed" at step 2 (OpenSSH).** An unfinished Windows update blocks it. Use Start > Power > **Update and restart** (a plain restart is not enough), then run the script again. The script warns about this at the start.
 - **`status` says `session: NOT running` (Mac host).** Run `ftk start`. The LaunchAgent starts it at login.

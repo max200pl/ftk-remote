@@ -180,6 +180,15 @@ OpenSSH Server is installed, but Windows needs a restart to finish it
     }
 }
 Set-Service sshd -StartupType Automatic -ErrorAction Stop
+# keys only: no password logins on this SSH server
+$sshdCfg = Join-Path $env:ProgramData 'ssh\sshd_config'
+if (Test-Path $sshdCfg) {
+    $c = [IO.File]::ReadAllText($sshdCfg)
+    $c2 = [regex]::Replace($c, '(?m)^\s*#?\s*PasswordAuthentication\s+\S+', 'PasswordAuthentication no')
+    if ($c2 -notmatch '(?m)^PasswordAuthentication no') { $c2 = "PasswordAuthentication no`r`n" + $c2 }
+    if ($c2 -ne $c) { [IO.File]::WriteAllText($sshdCfg, $c2, (New-Object Text.UTF8Encoding($false))); Write-Host 'sshd: password logins switched off (keys only)' }
+}
+Restart-Service sshd -ErrorAction SilentlyContinue
 Start-Service sshd -ErrorAction Stop
 # allow port 22 only from Tailscale addresses
 $rule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
@@ -261,6 +270,20 @@ function Read-Lines([string]$path) {   # read while another process is writing (
         $txt = $sr.ReadToEnd(); $sr.Close()
         return @($txt -split "`r?`n" | Where-Object { $_ -ne '' })
     } catch { return @() }
+}
+function Verify-Release([string]$file, [string]$sig, [string]$signers) {   # ssh-keygen -Y verify, message on stdin
+    if (-not (Test-Path $sig)) { return $false }
+    $kg = if ($IsWin) { Join-Path $env:windir 'System32\OpenSSH\ssh-keygen.exe' } else { 'ssh-keygen' }
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = $kg
+    $psi.Arguments = '-Y verify -f "' + $signers + '" -I ftk-release -n ftk-update -s "' + $sig + '"'
+    $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    try {
+        $p = [Diagnostics.Process]::Start($psi)
+        $b = [IO.File]::ReadAllBytes($file); $p.StandardInput.BaseStream.Write($b, 0, $b.Length); $p.StandardInput.Close()
+        [void]$p.StandardOutput.ReadToEnd(); [void]$p.StandardError.ReadToEnd(); $p.WaitForExit()
+        return ($p.ExitCode -eq 0)
+    } catch { return $false }
 }
 function Say([string]$t) { [Console]::Out.WriteLine($t) }   # inside functions: print without polluting the return value
 function Read-Text([string]$path) { if (Test-Path -LiteralPath $path) { return ([IO.File]::ReadAllText($path)).Trim() } else { return '' } }
@@ -647,19 +670,43 @@ switch ($cmd) {
     [void]$f.ShowDialog()
 }
 'version' { Write-Output $FtkVersion }
-'update' {   # update [quiet]: replace this helper with the newest version from GitHub (only if newer and it parses)
+'update' {   # update [quiet]: install a newer helper from GitHub ONLY if it is signed by the teammate's key
     $quiet = ((A 1) -eq 'quiet')
     if (Test-Path (Join-Path $FTK 'no-update')) { if (-not $quiet) { Write-Output 'updates are switched off on this host (~/.ftk/no-update)' }; break }
+    $signers = Join-Path $FTK 'allowed_signers'
+    if (-not (Test-Path $signers)) { if (-not $quiet) { Write-Output 'update refused: no trusted release key on this host (~/.ftk/allowed_signers)' }; break }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("ftk-remote-" + [guid]::NewGuid().ToString('N') + '.ps1')
-    try { Invoke-WebRequest -UseBasicParsing -Uri $FtkRaw -OutFile $tmp -TimeoutSec 20 } catch { if (-not $quiet) { Write-Output "update check failed: $($_.Exception.Message)" }; break }
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $FtkRaw -OutFile $tmp -TimeoutSec 20
+        Invoke-WebRequest -UseBasicParsing -Uri ($FtkRaw + '.sig') -OutFile ($tmp + '.sig') -TimeoutSec 20
+    } catch { Remove-Item $tmp, ($tmp + '.sig') -ErrorAction SilentlyContinue; if (-not $quiet) { Write-Output "update check failed: $($_.Exception.Message)" }; break }
+    $done = {
+        param($msg) Remove-Item $tmp, ($tmp + '.sig') -ErrorAction SilentlyContinue; if ($msg) { Write-Output $msg }
+    }
+    if (-not (Verify-Release $tmp ($tmp + '.sig') $signers)) { & $done 'update REFUSED: the signature does not match the trusted release key'; break }
     $txt = [IO.File]::ReadAllText($tmp)
     $m = [regex]::Match($txt, "\`$FtkVersion = '([0-9.]+)'")
     $errs = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$errs)
-    if (-not $m.Success -or $errs) { Remove-Item $tmp -ErrorAction SilentlyContinue; if (-not $quiet) { Write-Output 'update skipped: downloaded file is not a valid helper' }; break }
+    if (-not $m.Success -or $errs) { & $done $(if ($quiet) { '' } else { 'update skipped: downloaded file is not a valid helper' }); break }
     $new = $m.Groups[1].Value
-    if ([version]$new -le [version]$FtkVersion) { Remove-Item $tmp -ErrorAction SilentlyContinue; if (-not $quiet) { Write-Output "up to date ($FtkVersion)" }; break }
-    try { Copy-Item $tmp $PSCommandPath -Force; Write-Output "updated $FtkVersion -> $new" } catch { Write-Output "update failed (no write access to $PSCommandPath): $($_.Exception.Message)" }
-    Remove-Item $tmp -ErrorAction SilentlyContinue
+    if ([version]$new -le [version]$FtkVersion) { & $done $(if ($quiet) { '' } else { "up to date ($FtkVersion)" }); break }
+    try {
+        Copy-Item $PSCommandPath ($PSCommandPath + '.bak') -Force
+        Copy-Item $tmp $PSCommandPath -Force
+        & $done "updated $FtkVersion -> $new (signed; previous kept for: rollback)"
+    } catch { & $done "update failed (no write access to $PSCommandPath): $($_.Exception.Message)" }
+}
+'rollback' {   # go back to the helper that was installed before the last update
+    $bak = $PSCommandPath + '.bak'
+    if (-not (Test-Path $bak)) { Write-Output 'nothing to roll back to'; exit 1 }
+    Copy-Item $bak $PSCommandPath -Force; Write-Output 'rolled back to the previous helper'
+}
+'trust-signer' {   # trust-signer <b64 public key>: the key whose signature releases need
+    $k = (B64Dec (A 1)).Trim()
+    if ($k -notmatch '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/=]+') { Write-Output 'bad public key'; exit 2 }
+    $parts = $k -split ' '
+    Write-Utf8 (Join-Path $FTK 'allowed_signers') ('ftk-release namespaces="ftk-update" ' + $parts[0] + ' ' + $parts[1] + "`n")
+    Write-Output 'release signing key trusted'
 }
 'autostart' {   # what the desktop / startup shortcut runs: update quietly, then show the progress window
     $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -814,7 +861,7 @@ switch ($cmd) {
     Write-Output 'No live terminal on a Windows host (the agent runs headless). Use: peek, log, wait, say.'; exit 2
 }
 default {
-    Write-Output 'usage: ftk-remote.ps1 [-s lane] say|wait|peek|log|setup-log|monitor|monitor-window|show-monitor|version|update|autostart|install-shortcuts|key|status|lanes|run|start|restart|setproject|put|get|xfer|git|checkout|new-lane|clone|unbundle|set-topic|notify'
+    Write-Output 'usage: ftk-remote.ps1 [-s lane] say|wait|peek|log|setup-log|monitor|monitor-window|show-monitor|version|update|rollback|trust-signer|autostart|install-shortcuts|key|status|lanes|run|start|restart|setproject|put|get|xfer|git|checkout|new-lane|clone|unbundle|set-topic|notify'
 }
 }
 '@
@@ -823,6 +870,7 @@ $FtkHome = Join-Path $env:USERPROFILE '.ftk'
 New-Item -ItemType Directory -Force -Path $FtkHome | Out-Null
 $PsExe = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
 function FtkR { & $PsExe -NoProfile -ExecutionPolicy Bypass -File $Helper @args }
+FtkR trust-signer (B64 $key) | Out-Host   # helper updates must be signed with this same key
 
 # ---------- the connection is ready: tell the teammate NOW, the rest can be watched over SSH ----------
 $line = "FTK|$ip|$env:USERNAME|windows"

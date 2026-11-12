@@ -177,6 +177,7 @@ switch -Regex ($cmd) {
     '^show$' { & $sshExe ftk "$($conf.remote) show-monitor"; break }
     '^version$' { Write-Host "client kit $(if (Test-Path (Join-Path (Join-Path $HOME '.ftk') 'kit-version')) { (Get-Content (Join-Path (Join-Path $HOME '.ftk') 'kit-version') -Raw).Trim() } else { '?' })"; & $sshExe ftk "$($conf.remote) version"; break }
     '^update-host$' { & $sshExe ftk "$($conf.remote) update"; break }
+    '^rollback-host$' { & $sshExe ftk "$($conf.remote) rollback"; break }
     '^setup-log$' { Num $r1; & $sshExe ftk "$R setup-log $r1"; break }
     '^wait$' { Num $r1; & $sshExe ftk "$R wait $r1"; break }
     '^log$' {
@@ -259,7 +260,8 @@ ftk xfer                   list ~/.ftk/xfer on the host
 ftk [-s LANE] setproject PATH   point the agent at a folder on the host (~/ allowed)
 ftk shell                  plain ssh to the host
 ftk version                client kit + host helper versions
-ftk update-host            update the host helper from GitHub now
+ftk update-host            update the host helper from GitHub now (signed releases only)
+ftk rollback-host          go back to the previous host helper
 ftk events [1h]            ntfy notifications: ready / turn finished / needs you
 "@
         exit 0

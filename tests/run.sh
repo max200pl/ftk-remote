@@ -179,6 +179,8 @@ h=json.load(open(os.path.expanduser('~/.claude/settings.json')))['hooks']
 assert len(h['Stop'])==1 and len(h['Notification'])==1
 assert 'ftk-remote' in h['Stop'][0]['hooks'][0]['command'] and h['Stop'][0]['hooks'][0]['command'].endswith('notify stop')"
 check "LaunchAgent written and valid" bash -c "plutil -lint '$HOME/Library/LaunchAgents/com.ftk.agent.plist' && grep -q '$HOME/.ftk/ftk-remote' '$HOME/Library/LaunchAgents/com.ftk.agent.plist'"
+check "host setup trusts the teammate key for signed updates" grep -q '^ftk-release namespaces="ftk-update" ssh-ed25519 ' "$HOME/.ftk/allowed_signers"
+check "Windows setup makes sshd key-only" grep -q 'PasswordAuthentication no' "$ROOT/host-setup-windows.ps1"
 check "authorized_keys mode 600" bash -c "[ \"\$(stat -f %Lp '$HOME/.ssh/authorized_keys')\" = 600 ]"
 check "installed helper == ftk-remote.sh" cmp "$R" "$ROOT/ftk-remote.sh"
 REPO="$FTK_PROJECT/demo-toolkit"
@@ -471,26 +473,40 @@ while IFS= read -r line; do
 done < <(FTK_BIN="$HOME/.local/bin/ftk" python3 "$ROOT/tests/mcp_check.py" "$ROOT/ftk-mcp.py" 2>&1)
 
 # ======================================================================
-section "6c. Versioning: hosts update themselves"
-UPD="$T/upd"; mkdir -p "$UPD/srv"
+section "6c. Versioning: signed updates only"
+UPD="$T/upd"; mkdir -p "$UPD/srv" "$UPD/mh/.ftk" "$UPD/wh"
 ( cd "$UPD/srv" && exec python3 -u -m http.server 0 --bind 127.0.0.1 > "$UPD/http.log" 2>&1 ) & HTTP_PID=$!
 for _ in $(seq 1 50); do PORT="$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$UPD/http.log" | head -1)"; [ -n "$PORT" ] && break; sleep 0.1; done
-NEWV="9999.1.1.1"
+ssh-keygen -q -t ed25519 -N "" -f "$UPD/rk"; ssh-keygen -q -t ed25519 -N "" -f "$UPD/evil"
+NEWV="9999.1.1.1"; U="http://127.0.0.1:$PORT"
 sed "s/^FTK_VERSION=\"$V\"/FTK_VERSION=\"$NEWV\"/" "$ROOT/ftk-remote.sh" > "$UPD/srv/ftk-remote.sh"
 sed "s/^\\\$FtkVersion = '$V'/\\\$FtkVersion = '$NEWV'/" "$ROOT/ftk-remote.ps1" > "$UPD/srv/ftk-remote.ps1"
-cp "$ROOT/ftk-remote.sh" "$UPD/h.sh"; chmod +x "$UPD/h.sh"; cp "$ROOT/ftk-remote.ps1" "$UPD/h.ps1"
-check "mac helper: newer version on the server -> updated" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h.sh' update | grep -q 'updated $V -> $NEWV' && [ \"\$('$UPD/h.sh' version)\" = '$NEWV' ]"
-check "mac helper: same version -> up to date" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h.sh' update | grep -q 'up to date'"
-echo 'not a script (' > "$UPD/srv/bad.sh"; cp "$ROOT/ftk-remote.sh" "$UPD/h2.sh"; chmod +x "$UPD/h2.sh"
-check "mac helper: invalid download is not installed" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/bad.sh '$UPD/h2.sh' update | grep -q 'skipped' && cmp '$UPD/h2.sh' '$ROOT/ftk-remote.sh'"
+for f in ftk-remote.sh ftk-remote.ps1; do ssh-keygen -q -Y sign -f "$UPD/rk" -n ftk-update "$UPD/srv/$f" 2>/dev/null; done
+cp "$UPD/srv/ftk-remote.sh" "$UPD/srv/tampered.sh"; echo '# injected' >> "$UPD/srv/tampered.sh"; cp "$UPD/srv/ftk-remote.sh.sig" "$UPD/srv/tampered.sh.sig"
+cp "$UPD/srv/ftk-remote.sh" "$UPD/srv/evil.sh"; ssh-keygen -q -Y sign -f "$UPD/evil" -n ftk-update "$UPD/srv/evil.sh" 2>/dev/null
+cp "$UPD/srv/ftk-remote.sh" "$UPD/srv/nosig.sh"
+MH() { HOME="$UPD/mh" FTK_UPDATE_URL="$U/$1" "$UPD/h.sh" "${@:2}"; }
+cp "$ROOT/ftk-remote.sh" "$UPD/h.sh"; chmod +x "$UPD/h.sh"
+check "mac: no trusted key on the host -> update refused" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/ftk-remote.sh' '$UPD/h.sh' update | grep -q 'no trusted release key' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
+HOME="$UPD/mh" "$UPD/h.sh" trust-signer "$(b64 "$(cat "$UPD/rk.pub")")" >/dev/null
+check "mac: trust-signer writes allowed_signers" grep -q '^ftk-release namespaces="ftk-update" ssh-ed25519 ' "$UPD/mh/.ftk/allowed_signers"
+check "mac: tampered file (valid sig of another content) -> REFUSED" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/tampered.sh' '$UPD/h.sh' update | grep -q 'REFUSED' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
+check "mac: signed by a different key -> REFUSED" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/evil.sh' '$UPD/h.sh' update | grep -q 'REFUSED' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
+check "mac: no .sig on the server -> not installed" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/nosig.sh' '$UPD/h.sh' update | grep -q 'check failed' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
+check "mac: properly signed newer version -> updated (+ .bak)" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/ftk-remote.sh' '$UPD/h.sh' update | grep -q 'updated $V -> $NEWV (signed' && [ \"\$('$UPD/h.sh' version)\" = '$NEWV' ] && cmp '$UPD/h.sh.bak' '$ROOT/ftk-remote.sh'"
+check "mac: same version again -> up to date" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/ftk-remote.sh' '$UPD/h.sh' update | grep -q 'up to date'"
+check "mac: rollback restores the previous helper" bash -c "'$UPD/h.sh' rollback | grep -q 'rolled back' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
+mkdir -p "$UPD/mh/.ftk"; touch "$UPD/mh/.ftk/no-update"
+check "no-update file switches updates off" bash -c "HOME='$UPD/mh' FTK_UPDATE_URL='$U/ftk-remote.sh' '$UPD/h.sh' update | grep -q 'switched off' && cmp '$UPD/h.sh' '$ROOT/ftk-remote.sh'"
 if [ -n "$PWSH" ]; then
-  check "windows helper: newer version -> updated" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.ps1 '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'updated $V -> $NEWV' && [ \"\$('$PWSH' -NoProfile -File '$UPD/h.ps1' version)\" = '$NEWV' ]"
-  check "windows helper: same version -> up to date" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.ps1 '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'up to date'"
-  cp "$ROOT/ftk-remote.ps1" "$UPD/h2.ps1"; echo 'function {' > "$UPD/srv/bad.ps1"
-  check "windows helper: invalid download is not installed" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/bad.ps1 '$PWSH' -NoProfile -File '$UPD/h2.ps1' update | grep -q 'skipped' && cmp '$UPD/h2.ps1' '$ROOT/ftk-remote.ps1'"
+  cp "$ROOT/ftk-remote.ps1" "$UPD/h.ps1"; WP() { FTK_HOME="$UPD/wh" FTK_UPDATE_URL="$U/$1" "$PWSH" -NoProfile -File "$UPD/h.ps1" "${@:2}"; }
+  check "windows: no trusted key -> update refused" bash -c "FTK_HOME='$UPD/wh' FTK_UPDATE_URL='$U/ftk-remote.ps1' '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'no trusted release key'"
+  FTK_HOME="$UPD/wh" "$PWSH" -NoProfile -File "$UPD/h.ps1" trust-signer "$(b64 "$(cat "$UPD/rk.pub")")" >/dev/null
+  cp "$UPD/srv/ftk-remote.ps1" "$UPD/srv/t.ps1"; echo '# injected' >> "$UPD/srv/t.ps1"; cp "$UPD/srv/ftk-remote.ps1.sig" "$UPD/srv/t.ps1.sig"
+  check "windows: tampered file -> REFUSED" bash -c "FTK_HOME='$UPD/wh' FTK_UPDATE_URL='$U/t.ps1' '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'REFUSED' && cmp '$UPD/h.ps1' '$ROOT/ftk-remote.ps1'"
+  check "windows: properly signed newer version -> updated (+ .bak)" bash -c "FTK_HOME='$UPD/wh' FTK_UPDATE_URL='$U/ftk-remote.ps1' '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'updated $V -> $NEWV (signed' && [ \"\$('$PWSH' -NoProfile -File '$UPD/h.ps1' version)\" = '$NEWV' ]"
+  check "windows: rollback restores the previous helper" bash -c "FTK_HOME='$UPD/wh' '$PWSH' -NoProfile -File '$UPD/h.ps1' rollback | grep -q 'rolled back' && cmp '$UPD/h.ps1' '$ROOT/ftk-remote.ps1'"
 fi
-mkdir -p "$T/noupd/.ftk"; touch "$T/noupd/.ftk/no-update"; cp "$ROOT/ftk-remote.sh" "$UPD/h3.sh"; chmod +x "$UPD/h3.sh"
-check "no-update file switches updates off" bash -c "HOME='$T/noupd' FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h3.sh' update | grep -q 'switched off' && cmp '$UPD/h3.sh' '$ROOT/ftk-remote.sh'"
 kill $HTTP_PID 2>/dev/null
 
 # ======================================================================
