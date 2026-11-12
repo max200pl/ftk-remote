@@ -88,6 +88,11 @@ Leave out anything you don't want to allow (for example `git push`, so that push
 - Keep the computer on, logged in (a locked screen is fine) and connected to Tailscale.
 - The agent starts again automatically when you log in.
 
+## Automatic updates (please read)
+The "FTK Agents" shortcut (Desktop and Startup on Windows, LaunchAgent on Mac) checks the kit repository on GitHub at every start. It installs a newer helper only if the version is higher and the file is valid. This means **whoever controls that GitHub repository can change the code that runs on this computer**.
+- To switch updates off, create an empty file `~/.ftk/no-update` (Windows: `%USERPROFILE%\.ftk\no-update`). The teammate can still update on request with `ftk update-host` only after you delete that file.
+- Removing the shortcut from Startup also stops the automatic update and the window at logon.
+
 ## How to revoke access later
 | | macOS | Windows |
 |---|---|---|

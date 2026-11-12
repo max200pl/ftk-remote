@@ -489,6 +489,8 @@ if [ -n "$PWSH" ]; then
   cp "$ROOT/ftk-remote.ps1" "$UPD/h2.ps1"; echo 'function {' > "$UPD/srv/bad.ps1"
   check "windows helper: invalid download is not installed" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/bad.ps1 '$PWSH' -NoProfile -File '$UPD/h2.ps1' update | grep -q 'skipped' && cmp '$UPD/h2.ps1' '$ROOT/ftk-remote.ps1'"
 fi
+mkdir -p "$T/noupd/.ftk"; touch "$T/noupd/.ftk/no-update"; cp "$ROOT/ftk-remote.sh" "$UPD/h3.sh"; chmod +x "$UPD/h3.sh"
+check "no-update file switches updates off" bash -c "HOME='$T/noupd' FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h3.sh' update | grep -q 'switched off' && cmp '$UPD/h3.sh' '$ROOT/ftk-remote.sh'"
 kill $HTTP_PID 2>/dev/null
 
 # ======================================================================

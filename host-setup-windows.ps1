@@ -649,6 +649,7 @@ switch ($cmd) {
 'version' { Write-Output $FtkVersion }
 'update' {   # update [quiet]: replace this helper with the newest version from GitHub (only if newer and it parses)
     $quiet = ((A 1) -eq 'quiet')
+    if (Test-Path (Join-Path $FTK 'no-update')) { if (-not $quiet) { Write-Output 'updates are switched off on this host (~/.ftk/no-update)' }; break }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("ftk-remote-" + [guid]::NewGuid().ToString('N') + '.ps1')
     try { Invoke-WebRequest -UseBasicParsing -Uri $FtkRaw -OutFile $tmp -TimeoutSec 20 } catch { if (-not $quiet) { Write-Output "update check failed: $($_.Exception.Message)" }; break }
     $txt = [IO.File]::ReadAllText($tmp)

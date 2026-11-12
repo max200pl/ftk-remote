@@ -467,6 +467,7 @@ PY
     echo "$n agent(s), $w working"; printf '%s' "$rows" ;;
   version) echo "$FTK_VERSION" ;;
   update)     # update [quiet]: replace this helper with the newest version from GitHub (only if newer and valid)
+    [ -f "$FTK/no-update" ] && { [ "$2" = quiet ] || echo "updates are switched off on this host (~/.ftk/no-update)"; exit 0; }
     tmp="$(mktemp)"
     if ! curl -fsS -m 20 "$FTK_RAW" -o "$tmp"; then rm -f "$tmp"; [ "$2" = quiet ] || echo "update check failed"; exit 0; fi
     new="$(sed -n 's/^FTK_VERSION="\([0-9.]*\)".*/\1/p' "$tmp" | head -1)"
