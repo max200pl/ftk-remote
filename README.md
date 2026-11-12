@@ -24,7 +24,7 @@ Open the host script and fill in the repo and branch at the top. The host then o
    - At the end, the script copies a line like `FTK|100.x.y.z|user|mac`. Send it back to the client.
 3. **Client** clicks OK and pastes that line. The script tests the connection.
 
-If the two of you use different Tailscale accounts, the host shares the machine:
+Normally the two of you use **different** Tailscale accounts (each person uses their own; nobody logs in with the other's). The host shares the machine:
 - Open https://login.tailscale.com/admin/machines.
 - Click the machine, then **...** > **Share**.
 - Send the invite to the client, who accepts it.

@@ -9,6 +9,15 @@ A teammate wants to use this computer for Claude Code agents working on a projec
 - **tmux + Claude Code:** the agent runs in a session called `ftk` inside the cloned repo. The repo is cloned **single-branch** (`v2` only). The teammate can add more agents ("lanes"), each in its own git worktree.
 - **Notifications:** ntfy pushes to the teammate, sent when setup is done, when the agent finishes a turn, and when it needs input.
 
+## Accounts: whose login goes where
+- **Tailscale:** log in with **your own** account. The teammate is in a different tailnet, so share this machine with them:
+  1. Open https://login.tailscale.com/admin/machines.
+  2. Click this machine, then **...** > **Share** > **Copy share link**.
+  3. Send the link to the teammate. They open it while logged in to *their* Tailscale account and click **Accept**. This machine then appears in their tailnet. Only this machine is shared, not your whole network.
+- **Claude Code:** log in with **your own** subscription in the agent window. The agents run under your account.
+- **Git:** no login. The repo comes inside the kit (`repo.bundle`) or from the teammate over SSH.
+- **Nobody needs the teammate's password.** They reach this machine only with the SSH key in `teammate.pub`.
+
 ## Instructions for Claude (the agent reading this)
 1. Find out the OS. Do **not** edit the scripts.
 2. **macOS.** The script must run in a real Terminal window: it shows dialogs, and Homebrew/git may ask for passwords. Do not run it inside your own shell tool, because it would block. From this folder, run:
