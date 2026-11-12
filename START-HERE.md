@@ -64,6 +64,15 @@ The agents run with normal Claude Code permissions, and nothing is auto-approved
 ```
 Leave out anything you don't want to allow (for example `git push`, so that pushes still ask).
 
+## Windows in a virtual machine on a Mac (Parallels / VMware Fusion / UTM)
+- **Run the Windows host setup inside the VM**, as on a normal PC. Tailscale inside the VM gives the VM its own address, so the VM's network mode (NAT or bridged) does not matter.
+- **WSL:** on Apple Silicon the VM usually cannot run WSL2 (no nested virtualization). The setup detects the VM and uses **WSL1** instead, which needs no virtualization.
+- **Keep the VM running:**
+  - Do not suspend or pause it. Parallels: Configure > Options > Optimization, turn off "Pause Windows when possible". Battery: "Longer battery life" off.
+  - Inside Windows, turn sleep off.
+  - The Mac itself must not sleep either; see "On a MacBook" below (the lid).
+- **Memory:** give the VM at least 8 GB if the Mac has 16 GB or more.
+
 ## On a MacBook (laptop)
 - **The lid matters.** A closed lid puts the Mac to sleep, which stops the agents and drops the connection. The setup's `caffeinate` only prevents *idle* sleep, not lid sleep. Pick one:
   1. Keep the lid **open** and the charger connected. The screen may turn off; that is fine.

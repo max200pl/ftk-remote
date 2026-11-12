@@ -187,10 +187,27 @@ if ($rule) {
 Mark 'Step 3/8 WSL'
 Write-Host 'Checking WSL...'
 & wsl.exe --update 2>&1 | Out-Null
-$wslOk = $false
-try { & wsl.exe -e true 2>&1 | Out-Null; $wslOk = ($LASTEXITCODE -eq 0) } catch { $wslOk = $false }
+# A Windows VM (Parallels / VMware / UTM on a Mac) usually has no nested virtualization, so WSL2 cannot start.
+# WSL1 needs no virtualization and runs tmux + Claude Code fine -> use WSL1 there.
+$cs = Get-CimInstance Win32_ComputerSystem
+$IsVM = ("$($cs.Manufacturer) $($cs.Model)" -match 'Parallels|VMware|QEMU|UTM|Virtual|Apple')
+if ($IsVM) { Write-Host "Virtual machine detected ($($cs.Manufacturer) $($cs.Model)) - WSL1 will be used if WSL2 cannot start." }
+function WslWorks { try { & wsl.exe -e true 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false } }
+$wslOk = WslWorks
+if (-not $wslOk -and $IsVM) {
+    # Ubuntu may already be registered as WSL2 and fail to start: convert it (harmless if it does not exist yet)
+    Write-Host 'Switching Ubuntu to WSL1 (no nested virtualization in this VM)...'
+    & wsl.exe --set-default-version 1 2>&1 | Out-Host
+    & wsl.exe --set-version Ubuntu 1 2>&1 | Out-Host
+    $wslOk = WslWorks
+}
 if (-not $wslOk) {
     Step "Step 3/8 - WSL`n`nWSL + Ubuntu will now be installed. This takes a few minutes.`nClick OK to start."
+    if ($IsVM) {
+        # WSL1 only needs the 'Windows Subsystem for Linux' feature; new distros then register as version 1
+        & dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart | Out-Host
+        & wsl.exe --set-default-version 1 2>&1 | Out-Host
+    }
     & wsl.exe --install -d Ubuntu
     Info @"
 Step 3/8 - Restart needed
