@@ -24,6 +24,17 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     exit
 }
 
+# full log of every run, readable by an agent helping the user
+$LogDir = Join-Path $env:ProgramData 'ftk'
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+try { Start-Transcript -Path (Join-Path $LogDir 'setup.log') -Append | Out-Null } catch { }
+$global:FtkStep = 'start'
+function Mark([string]$name) { $global:FtkStep = $name; Write-Host "=== $name ($(Get-Date -Format HH:mm:ss))" }
+function RebootPending {
+    return ((Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+            (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'))
+}
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 $Title = 'FTK Remote - Host setup (Windows)'
@@ -80,6 +91,7 @@ Have the SSH key your teammate sent you ready. Click OK to start.
 "@
 
 # ---------- Step 1: Tailscale ----------
+Mark 'Step 1/8 Tailscale'
 $ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
 if (-not (Test-Path $ts)) {
     Write-Host 'Installing Tailscale...'
@@ -107,10 +119,27 @@ if (-not $ip) { $ip = Ask "Step 1/8 - Could not read the Tailscale IP.`n`nRight-
 $ip = "$ip".Trim()
 
 # ---------- Step 2: OpenSSH Server ----------
+Mark 'Step 2/8 OpenSSH Server'
 Write-Host 'Checking OpenSSH Server...'
 if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+    Write-Host 'Installing OpenSSH Server (can take several minutes)...'
     $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
-    Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop | Out-Null
+    $res = Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop
+    if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
+        if ($res.RestartNeeded -or (RebootPending)) {
+            Info @"
+Step 2/8 - Restart needed
+
+OpenSSH Server is installed, but Windows needs a restart to finish it
+(often because a Windows update is pending as well).
+
+1. Restart the PC.
+2. Run this script (host-setup-windows.cmd) again - it continues where it stopped.
+"@
+            exit 0
+        }
+        throw 'OpenSSH Server was installed but the sshd service does not exist. Restart the PC and run the script again.'
+    }
 }
 Set-Service sshd -StartupType Automatic -ErrorAction Stop
 Start-Service sshd -ErrorAction Stop
@@ -123,6 +152,7 @@ if ($rule) {
 }
 
 # ---------- Step 3: WSL + Ubuntu + tmux ----------
+Mark 'Step 3/8 WSL'
 Write-Host 'Checking WSL...'
 & wsl.exe --update 2>&1 | Out-Null
 $wslOk = $false
@@ -150,12 +180,14 @@ if ((Wsl @('-u', 'root', '-e', 'sh', '-c', 'command -v tmux >/dev/null && comman
 }
 
 # ---------- Step 4: Claude Code (inside Ubuntu) ----------
+Mark 'Step 4/8 Claude Code'
 Write-Host 'Installing Claude Code in Ubuntu...'
 if ((Wsl @('-e', 'bash', '-lc', '[ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash')) -ne 0) {
     throw 'Claude Code install in Ubuntu failed'
 }
 
 # ---------- Step 5: teammate's SSH key ----------
+Mark 'Step 5/8 SSH key'
 $clip = ''
 try { $clip = "$(Get-Clipboard | Select-Object -First 1)".Trim() } catch { }
 # teammate.pub shipped next to this script wins over the clipboard
@@ -495,6 +527,7 @@ $cmd = "echo $(B64 $remote) | base64 -d | tr -d '\r' > /usr/local/bin/ftk-remote
 if ((Wsl @('-u', 'root', '-e', 'sh', '-c', $cmd)) -ne 0) { throw 'Could not install ftk-remote in Ubuntu' }
 
 # ---------- Step 6: repository + branch ----------
+Mark 'Step 6/8 Repository'
 $bundle = Join-Path $PSScriptRoot 'repo.bundle'
 $provided = $false
 if (Test-Path $bundle) {
@@ -571,6 +604,7 @@ $me = Join-Path $PSScriptRoot 'setup-migration-env.sh'
 if (Test-Path $me) { if ((Copy-ToWsl $me '$HOME/.ftk/setup-migration-env.sh' '755') -eq 0) { Write-Host 'copied ~/.ftk/setup-migration-env.sh (not run)' } }
 
 # ---------- Step 7: notifications, session, autostart ----------
+Mark 'Step 7/8 Session'
 if ($NtfyTopic) {
     Wsl @('-e', '/usr/local/bin/ftk-remote', 'set-topic', $NtfyTopic) | Out-Null
     Wsl @('-e', '/usr/local/bin/ftk-remote', 'install-hooks') | Out-Null
@@ -606,6 +640,7 @@ if (-not $Auto) { Start-Process wsl.exe -ArgumentList '-e', '/usr/local/bin/ftk-
 else { Write-Host 'Auto mode: log in to Claude once with:  wsl -e /usr/local/bin/ftk-remote drive' }
 
 # ---------- Step 8: connection line ----------
+Mark 'Step 8/8 Done'
 $line = "FTK|$ip|$env:USERNAME|windows"
 Set-Clipboard -Value $line
 Wsl @('-e', '/usr/local/bin/ftk-remote', 'notify', 'ready', (B64 $line)) | Out-Null
@@ -624,6 +659,7 @@ Notes:
 Write-Host "Connection line: $line"
 }
 catch {
-    Info "Setup failed:`n`n$($_.Exception.Message)`n`nFix the problem and run the script again."
+    $line = $_.InvocationInfo.ScriptLineNumber
+    Info "Setup failed at: $global:FtkStep (script line $line)`n`n$($_.Exception.Message)`n`nFull log: $LogDir\setup.log`nFix the problem (a restart often helps) and run the script again."
     exit 1
 }
