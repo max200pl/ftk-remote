@@ -157,6 +157,8 @@ $ftkPs1 = @'
 $confPath = if ($env:FTK_CONF) { $env:FTK_CONF } else { Join-Path (Join-Path $HOME '.ftk') 'client.conf' }
 $conf = Get-Content $confPath -Raw | ConvertFrom-Json
 $sshExe = if ($env:FTK_SSH) { $env:FTK_SSH } else { 'ssh' }
+$scpExe = if ($env:FTK_SCP) { $env:FTK_SCP } else { 'scp' }
+$TO = @('-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4')   # a stalled transfer fails instead of hanging
 $a = @($args | ForEach-Object { [string]$_ })
 $sel = ''
 if ($a.Count -ge 2 -and $a[0] -eq '-s') {
@@ -171,6 +173,10 @@ $rest = @($a | Select-Object -Skip 1)
 $r1 = if ($rest.Count) { $rest[0] } else { '' }
 switch -Regex ($cmd) {
     '^peek$' { Num $r1; & $sshExe ftk "$R peek $r1"; break }
+    '^monitor$' { & $sshExe ftk "$($conf.remote) monitor"; break }
+    '^show$' { & $sshExe ftk "$($conf.remote) show-monitor"; break }
+    '^version$' { Write-Host "client kit $(if (Test-Path (Join-Path (Join-Path $HOME '.ftk') 'kit-version')) { (Get-Content (Join-Path (Join-Path $HOME '.ftk') 'kit-version') -Raw).Trim() } else { '?' })"; & $sshExe ftk "$($conf.remote) version"; break }
+    '^update-host$' { & $sshExe ftk "$($conf.remote) update"; break }
     '^setup-log$' { Num $r1; & $sshExe ftk "$R setup-log $r1"; break }
     '^wait$' { Num $r1; & $sshExe ftk "$R wait $r1"; break }
     '^log$' {
@@ -196,20 +202,18 @@ switch -Regex ($cmd) {
         & $sshExe ftk "$R setproject $(B64 $r1)"; break
     }
     '^put$' {
-        if ($rest.Count -lt 2 -or -not (Test-Path -LiteralPath $r1 -PathType Leaf)) { Write-Host 'usage: ftk put <local file> <path under ~/.ftk/xfer>'; exit 2 }
+        if ($rest.Count -lt 2 -or -not (Test-Path -LiteralPath $r1 -PathType Leaf) -or [string]$rest[1] -notmatch '^[A-Za-z0-9._/-]+$' -or ([string]$rest[1]).Contains('..') -or ([string]$rest[1]).StartsWith('/')) { Write-Host 'usage: ftk put <local file> <path under ~/.ftk/xfer>'; exit 2 }
         $full = (Resolve-Path -LiteralPath $r1).Path
-        $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLower()
-        Write-Host "local $((Get-Item -LiteralPath $full).Length) bytes sha256 $sha"
-        [Convert]::ToBase64String([IO.File]::ReadAllBytes($full)) | & $sshExe ftk "$R put $(B64 $rest[1])"; break
+        Write-Host "local $((Get-Item -LiteralPath $full).Length) bytes sha256 $((Get-FileHash -Algorithm SHA256 -LiteralPath $full).Hash.ToLower())"
+        & $sshExe @TO ftk "$R xfer-prep $(B64 $rest[1])" | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Host 'put failed (prepare)'; exit 1 }
+        & $scpExe -q @TO $full "ftk:.ftk/xfer/$($rest[1])"; if ($LASTEXITCODE -ne 0) { Write-Host 'put failed (scp)'; exit 1 }
+        & $sshExe @TO ftk "$R xfer-hash $(B64 $rest[1])"; break
     }
     '^get$' {
-        if ($rest.Count -lt 2) { Write-Host 'usage: ftk get <path under ~/.ftk/xfer> <local file>'; exit 2 }
-        $txt = (& $sshExe ftk "$R get $(B64 $r1)") -join ''
-        if ($LASTEXITCODE -ne 0) { Write-Host 'get failed'; exit 1 }
+        if ($rest.Count -lt 2 -or $r1 -notmatch '^[A-Za-z0-9._/-]+$' -or $r1.Contains('..')) { Write-Host 'usage: ftk get <path under ~/.ftk/xfer> <local file>'; exit 2 }
         $dest = [IO.Path]::GetFullPath((Join-Path (Get-Location) $rest[1]))
-        [IO.File]::WriteAllBytes($dest, [Convert]::FromBase64String($txt))
-        $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLower()
-        Write-Host "saved $dest $((Get-Item -LiteralPath $dest).Length) bytes sha256 $sha"; exit 0
+        & $scpExe -q @TO "ftk:.ftk/xfer/$r1" $dest; if ($LASTEXITCODE -ne 0) { Write-Host 'get failed'; exit 1 }
+        Write-Host "saved $dest $((Get-Item -LiteralPath $dest).Length) bytes sha256 $((Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLower())"; exit 0
     }
     '^xfer$' { & $sshExe ftk "$R xfer"; break }
     '^new-lane$' {
@@ -247,11 +251,15 @@ ftk [-s LANE] COMMAND      (no -s = main agent; -s a1 = lane "a1")
   watch | drive     live view read-only / full control (Ctrl+B D to leave)
 ftk new-lane NAME BRANCH   new git worktree + agent session for parallel work
 ftk lanes                  all agent sessions with state and folder
+ftk monitor                all agents: status, time, steps, what each is doing now
+ftk show                   open the read-only progress window on the host's screen
 ftk put FILE REL           upload FILE to ~/.ftk/xfer/REL on the host (prints sha256)
 ftk get REL FILE           download ~/.ftk/xfer/REL to FILE
 ftk xfer                   list ~/.ftk/xfer on the host
 ftk [-s LANE] setproject PATH   point the agent at a folder on the host (~/ allowed)
 ftk shell                  plain ssh to the host
+ftk version                client kit + host helper versions
+ftk update-host            update the host helper from GitHub now
 ftk events [1h]            ntfy notifications: ready / turn finished / needs you
 "@
         exit 0
@@ -268,6 +276,20 @@ if (($userPath.Split(';') | Where-Object { $_ -eq $binDir }).Count -eq 0) {
     [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $binDir).TrimStart(';'), 'User')
 }
 $env:Path = "$env:Path;$binDir"
+
+# ---------- MCP server for Claude Code (ftk-bridge) ----------
+$kitMcp = Join-Path $PSScriptRoot 'ftk-mcp.py'
+$m = [regex]::Match((Get-Content (Join-Path $PSScriptRoot 'ftk-remote.ps1') -Raw -ErrorAction SilentlyContinue), "\`$FtkVersion = '([0-9.]+)'")
+if ($m.Success) { Write-NoBom (Join-Path $ftkDir 'kit-version') $m.Groups[1].Value }
+if (Test-Path $kitMcp) {
+    Copy-Item $kitMcp (Join-Path $ftkDir 'ftk-mcp.py') -Force
+    $py = if (Get-Command py.exe -ErrorAction SilentlyContinue) { @('py.exe', '-3') } elseif (Get-Command python.exe -ErrorAction SilentlyContinue) { @('python.exe') } else { @() }
+    if ((Get-Command claude -ErrorAction SilentlyContinue) -and $py.Count) {
+        & claude mcp remove ftk-bridge -s user 2>&1 | Out-Null
+        & claude mcp add ftk-bridge -s user -e "FTK_BIN=$(Join-Path $binDir 'ftk.cmd')" -- @py (Join-Path $ftkDir 'ftk-mcp.py') 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Host 'MCP server ftk-bridge registered for Claude Code (restart Claude Code sessions to load it)' } else { Write-Host 'WARNING: could not register the MCP server' }
+    } else { Write-Host 'Claude Code CLI or Python not found - MCP server not registered' }
+}
 
 # ---------- test ----------
 Write-Host "Testing connection to $hostIp ..."

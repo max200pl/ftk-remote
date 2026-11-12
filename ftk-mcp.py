@@ -54,6 +54,7 @@ TOOLS = [
     tool("ftk_git", "Branch, changed files and last 10 commits of the agent's project.", {"lane": LANE}, read_only=True),
     tool("ftk_checkout", "Switch the agent's project to a branch (refused with uncommitted changes or for private branches).",
          {"lane": LANE, "branch": {"type": "string", "minLength": 1}}, ["branch"]),
+    tool("ftk_monitor", "Snapshot of all agents on the host: status, time in state, steps in the current turn, what each is doing now.", read_only=True),
     tool("ftk_lanes", "All agent sessions on the host with running/stopped, state and folder.", read_only=True),
     tool("ftk_new_lane", "Create a lane: its own git worktree on `branch` (cut from the base branch, or tracking it if it "
          "exists on origin) and its own agent session ftk-<name>.",
@@ -102,13 +103,14 @@ def build(name, a):
     if name == "ftk_setup_log":  return ["setup-log", str(int(a.get("lines", 60)))], 60
     if name == "ftk_git":        return lane(a) + ["git"], 60
     if name == "ftk_checkout":   return lane(a) + ["checkout", a["branch"]], 300
+    if name == "ftk_monitor":    return ["monitor"], 60
     if name == "ftk_lanes":      return ["lanes"], 60
     if name == "ftk_new_lane":   return ["new-lane", a["name"], a["branch"]], 300
     if name == "ftk_start":      return lane(a) + ["start"], 60
     if name == "ftk_restart":    return lane(a) + ["restart"], 60
     if name == "ftk_setproject": return lane(a) + ["setproject", a["path"]], 60
-    if name == "ftk_put":        return ["put", os.path.expanduser(a["local_path"]), a["remote_path"]], 3600
-    if name == "ftk_get":        return ["get", a["remote_path"], os.path.expanduser(a["local_path"])], 3600
+    if name == "ftk_put":        return ["put", os.path.expanduser(a["local_path"]), a["remote_path"]], 900
+    if name == "ftk_get":        return ["get", a["remote_path"], os.path.expanduser(a["local_path"])], 900
     if name == "ftk_xfer":       return ["xfer"], 60
     if name == "ftk_events":     return ["events", a.get("since", "1h")], 60
     raise KeyError(name)

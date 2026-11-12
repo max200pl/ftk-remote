@@ -65,6 +65,17 @@ if [[ "$cmd" == "$WINP"* ]]; then
 fi
 exec bash -c "$cmd"
 EOF
+# scp: copy to/from the host's home (Mac host = this HOME, Windows host = the pwsh FTK_HOME's parent)
+cat > "$T/stubs/scp" <<'EOF'
+#!/bin/bash
+a=(); while [ $# -gt 0 ]; do case "$1" in -o) shift 2;; -q|-p|-B) shift;; *) a+=("$1"); shift;; esac; done
+echo "scp ${a[*]}" >> "$FTK_TEST_DIR/ssh.log"
+root="$HOME"; grep -q 'powershell' "$HOME/.ftk/client.conf" 2>/dev/null && root="$(dirname "$FTK_TEST_WINHOME")"
+map() { case "$1" in ftk:*) echo "$root/${1#ftk:}";; *) echo "$1";; esac; }
+s="$(map "${a[0]}")"; d="$(map "${a[1]}")"
+[ -f "$s" ] || { echo "scp: $s: No such file or directory" >&2; exit 1; }
+mkdir -p "$(dirname "$d")" && cp "$s" "$d"
+EOF
 # wsl: what the Windows host does (wsl -e /usr/local/bin/ftk-remote ...)
 cat > "$T/stubs/wsl" <<'EOF'
 #!/bin/bash
@@ -84,7 +95,8 @@ cat > "$T/stubs/tailscale" <<'EOF'
 #!/bin/bash
 [ "$1" = "ip" ] && echo "100.64.0.9"
 EOF
-for s in open nc claude launchctl; do printf '#!/bin/bash\nexit 0\n' > "$T/stubs/$s"; done
+for s in open nc launchctl; do printf '#!/bin/bash\nexit 0\n' > "$T/stubs/$s"; done
+printf '#!/bin/bash\necho "claude $*" >> "$FTK_TEST_DIR/claude.log"\nexit 0\n' > "$T/stubs/claude"
 chmod +x "$T/stubs/"*
 export PATH="$T/stubs:$PATH" FTK_TS_CLI="$T/stubs/tailscale"
 
@@ -122,6 +134,8 @@ b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 
 # ======================================================================
 section "1. Static checks"
+V="$(sed -n 's/^FTK_VERSION="\([0-9.]*\)".*/\1/p' "$ROOT/ftk-remote.sh")"
+check "Mac and Windows helpers carry the same version ($V)" bash -c "[ -n '$V' ] && grep -q \"^\\\$FtkVersion = '$V'\" '$ROOT/ftk-remote.ps1'"
 for f in ftk-remote.sh host-setup-mac.command client-setup-mac.command; do
   check "bash syntax: $f" bash -n "$ROOT/$f"
 done
@@ -351,9 +365,14 @@ head -c 300000 /dev/urandom > "$T/blob.bin"
 check "ftk put: binary file, sha256 matches" bash -c "'$FTK' put '$T/blob.bin' in/blob.bin | grep -q \"sha256 \$(shasum -a 256 '$T/blob.bin' | cut -d' ' -f1)\""
 check "ftk get: round-trip identical" bash -c "'$FTK' get in/blob.bin '$T/blob.back' >/dev/null && cmp '$T/blob.bin' '$T/blob.back'"
 check "ftk xfer lists the file" bash -c "'$FTK' xfer | grep -qx 'in/blob.bin'"
+head -c 200000 /dev/urandom > "$T/big.bin"
+check "put 200 KB uses scp (no stdin stream) and verifies sha256" bash -c "'$FTK' put '$T/big.bin' t/big.bin | grep -q \"sha256 \$(shasum -a 256 '$T/big.bin' | cut -d' ' -f1)\" && grep -q '^scp .*big.bin ftk:.ftk/xfer/t/big.bin' '$T/ssh.log'"
 check "put: '..' path refused" bash -c "! '$FTK' put '$T/blob.bin' ../evil 2>/dev/null; [ ! -e '$HOME/.ftk/evil' ]"
 check "get: missing file fails" bash -c "! '$FTK' get nope.bin '$T/nope' 2>/dev/null"
 check "ftk help lists commands" bash -c "'$FTK' help | grep -q 'ftk new-lane'"
+check "client setup registered the MCP server (claude mcp add ftk-bridge, FTK_BIN)" bash -c "grep -q 'claude mcp add ftk-bridge -s user -e FTK_BIN=$HOME/.local/bin/ftk -- python3 $HOME/.ftk/ftk-mcp.py' '$T/claude.log' && cmp '$HOME/.ftk/ftk-mcp.py' '$ROOT/ftk-mcp.py'"
+check "ftk version: client kit + host helper" bash -c "'$FTK' version | grep -q \"client kit $V\" && '$FTK' version | grep -q \"host helper $V\""
+check "ftk monitor on a Mac host" bash -c "'$FTK' monitor | grep -q 'agent(s)' && '$FTK' monitor | grep -Eq '^main '"
 
 # ======================================================================
 section "5. Windows host (native, headless, no WSL) through the client"
@@ -384,6 +403,7 @@ check "permission denials are shown with the allowlist hint" bash -c "'$FTK' pee
 check "log: all turns as text" bash -c "'$FTK' log 200 | grep -q 'ECHO: second turn' && '$FTK' log 200 | grep -q 'ECHO: DENY please'"
 check "log raw: jsonl" bash -c "'$FTK' log 5 raw | grep -q '\"type\": \"result\"\|\"type\":\"result\"'"
 check "restart: next say is a new conversation" bash -c "'$FTK' restart >/dev/null && '$FTK' say 'fresh' >/dev/null && '$FTK' wait 30 >/dev/null && '$FTK' peek | grep -q 'resumed=False'"
+check "ftk monitor: snapshot with status + steps" bash -c "'$FTK' monitor | grep -q 'agent(s)' && '$FTK' monitor | grep -Eq '^main +(finished turn|stopped|error) .* steps [0-9]'"
 check "watch/drive: explained (no live terminal)" bash -c "'$FTK' watch 2>&1 | grep -q 'headless'"
 ROUT="$("$FTK" run 'echo hi; echo "q\"x"; exit 4')"
 echo "$ROUT" | grep -q '^hi$' && echo "$ROUT" | grep -q '^\[exit 4\]$' && ok "run: bash command output + [exit 4]" || bad "run on windows host" "$ROUT"
@@ -451,6 +471,27 @@ while IFS= read -r line; do
 done < <(FTK_BIN="$HOME/.local/bin/ftk" python3 "$ROOT/tests/mcp_check.py" "$ROOT/ftk-mcp.py" 2>&1)
 
 # ======================================================================
+section "6c. Versioning: hosts update themselves"
+UPD="$T/upd"; mkdir -p "$UPD/srv"
+( cd "$UPD/srv" && exec python3 -u -m http.server 0 --bind 127.0.0.1 > "$UPD/http.log" 2>&1 ) & HTTP_PID=$!
+for _ in $(seq 1 50); do PORT="$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$UPD/http.log" | head -1)"; [ -n "$PORT" ] && break; sleep 0.1; done
+NEWV="9999.1.1.1"
+sed "s/^FTK_VERSION=\"$V\"/FTK_VERSION=\"$NEWV\"/" "$ROOT/ftk-remote.sh" > "$UPD/srv/ftk-remote.sh"
+sed "s/^\\\$FtkVersion = '$V'/\\\$FtkVersion = '$NEWV'/" "$ROOT/ftk-remote.ps1" > "$UPD/srv/ftk-remote.ps1"
+cp "$ROOT/ftk-remote.sh" "$UPD/h.sh"; chmod +x "$UPD/h.sh"; cp "$ROOT/ftk-remote.ps1" "$UPD/h.ps1"
+check "mac helper: newer version on the server -> updated" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h.sh' update | grep -q 'updated $V -> $NEWV' && [ \"\$('$UPD/h.sh' version)\" = '$NEWV' ]"
+check "mac helper: same version -> up to date" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.sh '$UPD/h.sh' update | grep -q 'up to date'"
+echo 'not a script (' > "$UPD/srv/bad.sh"; cp "$ROOT/ftk-remote.sh" "$UPD/h2.sh"; chmod +x "$UPD/h2.sh"
+check "mac helper: invalid download is not installed" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/bad.sh '$UPD/h2.sh' update | grep -q 'skipped' && cmp '$UPD/h2.sh' '$ROOT/ftk-remote.sh'"
+if [ -n "$PWSH" ]; then
+  check "windows helper: newer version -> updated" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.ps1 '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'updated $V -> $NEWV' && [ \"\$('$PWSH' -NoProfile -File '$UPD/h.ps1' version)\" = '$NEWV' ]"
+  check "windows helper: same version -> up to date" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/ftk-remote.ps1 '$PWSH' -NoProfile -File '$UPD/h.ps1' update | grep -q 'up to date'"
+  cp "$ROOT/ftk-remote.ps1" "$UPD/h2.ps1"; echo 'function {' > "$UPD/srv/bad.ps1"
+  check "windows helper: invalid download is not installed" bash -c "FTK_UPDATE_URL=http://127.0.0.1:$PORT/bad.ps1 '$PWSH' -NoProfile -File '$UPD/h2.ps1' update | grep -q 'skipped' && cmp '$UPD/h2.ps1' '$ROOT/ftk-remote.ps1'"
+fi
+kill $HTTP_PID 2>/dev/null
+
+# ======================================================================
 section "7. package.sh (archive for the teammate)"
 PK_HOME="$T/pkhome"; mkdir -p "$PK_HOME"
 cp -R "$ROOT" "$T/src"; rm -rf "$T/src/dist" "$T/src/tests/.cache" "$T/src/local.env" "$T/src/migration"
@@ -459,15 +500,16 @@ MIGF="$T/src/migration"; mkdir -p "$MIGF"
 printf '# Migration\nfixture\n' > "$MIGF/MIGRATION.md"
 printf -- '---\nname: migration-worker\n---\nfixture agent\n' > "$MIGF/migration-worker.md"
 printf '#!/bin/bash\necho fixture env\n' > "$MIGF/setup-migration-env.sh"
+printf -- '---\nname: migration-unit\n---\nfixture skill\n' > "$MIGF/migration-unit.SKILL.md"
 printf 'REPO_URL="https://git.example.com/acme/docs-kit.git"\nREPO_BRANCH="v2"\n' > "$T/src/local.env"
 OUT="$(HOME="$PK_HOME" bash "$T/src/package.sh" https://git.example.com/acme/demo-toolkit.git migration/v2 2>&1)" && ok "package.sh exits 0" || bad "package.sh exits 0" "$OUT"
 Z="$T/src/dist/ftk-host.zip"; mkdir -p "$T/unz"; unzip -q "$Z" -d "$T/unz" 2>/dev/null
 D="$T/unz/ftk-host"
-for f in host-setup-mac.command host-setup-windows.ps1 host-setup-windows.cmd START-HERE.md README.md teammate.pub MIGRATION.md migration-worker.md setup-migration-env.sh; do
+for f in host-setup-mac.command host-setup-windows.ps1 host-setup-windows.cmd START-HERE.md README.md teammate.pub MIGRATION.md migration-worker.md migration-unit.SKILL.md setup-migration-env.sh; do
   check "zip contains $f" test -f "$D/$f"
 done
 check "zip has no client scripts / tests" bash -c "! ls '$D' | grep -qE 'client-|tests|package'"
-for f in MIGRATION.md migration-worker.md setup-migration-env.sh; do check "zip: $f is a verbatim copy" cmp "$D/$f" "$MIGF/$f"; done
+for f in MIGRATION.md migration-worker.md migration-unit.SKILL.md setup-migration-env.sh; do check "zip: $f is a verbatim copy" cmp "$D/$f" "$MIGF/$f"; done
 check "zip: no other migration content (gatekeeper / delegation / records)" bash -c "! ls '$D' | grep -qiE 'gatekeeper|delegation|records'"
 check "teammate.pub = your key" cmp "$D/teammate.pub" "$PK_HOME/.ssh/ftk_ed25519.pub"
 PT="$(cat "$PK_HOME/.ftk/ntfy-topic")"
@@ -486,6 +528,7 @@ check "zip ships repo.bundle" test -f "$T/unzb/ftk-host/repo.bundle"
 H4="$T/home4"; mkdir -p "$H4"; touch "$H4/.bashrc"
 OUTH="$(HOME="$H4" FTK_PICK= bash "$T/unzb/ftk-host/host-setup-mac.command" 2>&1)" && ok "host setup from the zip with repo.bundle exits 0 (no repo questions)" || bad "host setup with bundle" "$OUTH"
 P4="$(cat "$H4/.ftk/project" 2>/dev/null)"
+check "host setup installs ~/.claude/skills/migration-unit/SKILL.md" cmp "$H4/.claude/skills/migration-unit/SKILL.md" "$MIGF/migration-unit.SKILL.md"
 check "host setup installs ~/.claude/agents/migration-worker.md" cmp "$H4/.claude/agents/migration-worker.md" "$MIGF/migration-worker.md"
 check "host setup copies setup-migration-env.sh to ~/.ftk (executable, not run)" bash -c "[ -x '$H4/.ftk/setup-migration-env.sh' ] && cmp '$H4/.ftk/setup-migration-env.sh' '$MIGF/setup-migration-env.sh' && [ ! -d '$H4/.ftk/venv-proj' ]"
 check "bundled repo unpacked to ~/Projects/demo-toolkit" bash -c "[ '$P4' = '$H4/Projects/demo-toolkit' ] && [ -f '$P4/V2.md' ] && ! git -C '$P4' remote get-url origin"

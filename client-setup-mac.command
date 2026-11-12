@@ -138,6 +138,7 @@ if [ "${1:-}" = "-s" ]; then
   SEL="-s $2"; shift 2
 fi
 RR="$FTK_REMOTE${SEL:+ $SEL}"
+TO="-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"   # a stalled transfer fails instead of hanging
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 num() { [[ -z "${1:-}" || "$1" =~ ^[0-9]+$ ]] || { echo "number expected"; exit 2; }; }
 cmd="${1:-help}"; shift 2>/dev/null
@@ -145,6 +146,10 @@ case "$cmd" in
   peek)          num "${1:-}"; ssh ftk "$RR peek ${1:-}" ;;
   log)           num "${1:-}"; [[ -z "${2:-}" || "$2" = raw ]] || { echo "usage: ftk log [N] [raw]"; exit 2; }
                  ssh ftk "$RR log ${1:-30} ${2:-}" ;;
+  monitor)       ssh ftk "$FTK_REMOTE monitor" ;;
+  show)          ssh ftk "$FTK_REMOTE show-monitor" ;;
+  version)       echo "client kit $(cat "$HOME/.ftk/kit-version" 2>/dev/null || echo '?')"; printf 'host helper '; ssh ftk "$FTK_REMOTE version" ;;
+  update-host)   ssh ftk "$FTK_REMOTE update" ;;
   setup-log)     num "${1:-}"; ssh ftk "$RR setup-log ${1:-}" ;;
   wait)          num "${1:-}"; ssh ftk "$RR wait ${1:-}" ;;
   status|start|restart|git|lanes) ssh ftk "$RR $cmd" ;;
@@ -158,13 +163,14 @@ case "$cmd" in
                  ssh ftk "$RR checkout $(b64 "$1")" ;;
   setproject)    [ -n "${1:-}" ] || { echo "usage: ftk [-s LANE] setproject <host path, ~/ allowed>"; exit 2; }
                  ssh ftk "$RR setproject $(b64 "$1")" ;;
-  put)           [ -f "${1:-}" ] && [ -n "${2:-}" ] || { echo "usage: ftk put <local file> <path under ~/.ftk/xfer>"; exit 2; }
+  put)           [ -f "${1:-}" ] && [[ "${2:-}" =~ ^[A-Za-z0-9._/-]+$ && "$2" != /* && "$2" != *..* ]] || { echo "usage: ftk put <local file> <path under ~/.ftk/xfer>"; exit 2; }
                  echo "local $(wc -c < "$1" | tr -d ' ') bytes sha256 $(shasum -a 256 "$1" | cut -d' ' -f1)"
-                 base64 < "$1" | ssh ftk "$RR put $(b64 "$2")" ;;
-  get)           [ -n "${1:-}" ] && [ -n "${2:-}" ] || { echo "usage: ftk get <path under ~/.ftk/xfer> <local file>"; exit 2; }
-                 ssh ftk "$RR get $(b64 "$1")" > "$2.b64" && base64 --decode < "$2.b64" > "$2" && rm -f "$2.b64" &&
-                   echo "saved $2 $(wc -c < "$2" | tr -d ' ') bytes sha256 $(shasum -a 256 "$2" | cut -d' ' -f1)" ||
-                   { rm -f "$2.b64"; echo "get failed"; exit 1; } ;;
+                 ssh $TO ftk "$RR xfer-prep $(b64 "$2")" >/dev/null || { echo "put failed (prepare)"; exit 1; }
+                 scp -q $TO "$1" "ftk:.ftk/xfer/$2" || { echo "put failed (scp)"; exit 1; }
+                 ssh $TO ftk "$RR xfer-hash $(b64 "$2")" ;;
+  get)           [[ "${1:-}" =~ ^[A-Za-z0-9._/-]+$ && "$1" != /* && "$1" != *..* ]] && [ -n "${2:-}" ] || { echo "usage: ftk get <path under ~/.ftk/xfer> <local file>"; exit 2; }
+                 scp -q $TO "ftk:.ftk/xfer/$1" "$2" || { echo "get failed"; exit 1; }
+                 echo "saved $2 $(wc -c < "$2" | tr -d ' ') bytes sha256 $(shasum -a 256 "$2" | cut -d' ' -f1)" ;;
   xfer)          ssh ftk "$RR xfer" ;;
   new-lane)      [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] && [ -n "${2:-}" ] || { echo "usage: ftk new-lane <name> <branch>"; exit 2; }
                  ssh ftk "$FTK_REMOTE new-lane $1 $(b64 "$2")" ;;
@@ -196,11 +202,15 @@ ftk [-s LANE] COMMAND      (no -s = main agent; -s a1 = lane "a1")
   watch | drive     live view read-only / full control (Ctrl+B D to leave)
 ftk new-lane NAME BRANCH   new git worktree + agent session for parallel work
 ftk lanes                  all agent sessions with state and folder
+ftk monitor                all agents: status, time, steps, what each is doing now
+ftk show                   open the read-only progress window on the host's screen
 ftk put FILE REL           upload FILE to ~/.ftk/xfer/REL on the host (prints sha256)
 ftk get REL FILE           download ~/.ftk/xfer/REL to FILE
 ftk xfer                   list ~/.ftk/xfer on the host
 ftk [-s LANE] setproject PATH   point the agent at a folder on the host (~/ allowed)
 ftk shell                  plain ssh to the host
+ftk version                client kit + host helper versions
+ftk update-host            update the host helper from GitHub now
 ftk events [1h]            ntfy notifications: ready / turn finished / needs you
 H
   ;;
@@ -211,6 +221,19 @@ case ":$PATH:" in *":$BIN:"*) ;; *)
   grep -q 'ftk: add ~/.local/bin' "$HOME/.zshrc" 2>/dev/null ||
     printf '\n# ftk: add ~/.local/bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zshrc" ;;
 esac
+
+# ---------- MCP server for Claude Code (ftk-bridge) ----------
+KITDIR="$(cd "$(dirname "$0")" && pwd)"
+sed -n 's/^FTK_VERSION="\([0-9.]*\)".*/\1/p' "$KITDIR/ftk-remote.sh" 2>/dev/null | head -1 > "$HOME/.ftk/kit-version"
+if [ -f "$KITDIR/ftk-mcp.py" ]; then
+  cp "$KITDIR/ftk-mcp.py" "$HOME/.ftk/ftk-mcp.py"
+  if command -v claude >/dev/null 2>&1; then
+    claude mcp remove ftk-bridge -s user >/dev/null 2>&1
+    if claude mcp add ftk-bridge -s user -e "FTK_BIN=$BIN/ftk" -- python3 "$HOME/.ftk/ftk-mcp.py" >/dev/null 2>&1; then
+      echo "MCP server ftk-bridge registered for Claude Code (restart Claude Code sessions to load it)"
+    else echo "WARNING: could not register the MCP server (claude mcp add ftk-bridge ...)"; fi
+  else echo "Claude Code CLI not found - MCP server not registered (later: claude mcp add ftk-bridge -s user -- python3 ~/.ftk/ftk-mcp.py)"; fi
+fi
 
 # ---------- test ----------
 echo "Testing connection to $HOST ..."

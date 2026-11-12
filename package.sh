@@ -29,9 +29,9 @@ OUT="$ROOT/dist/ftk-host"
 rm -rf "$OUT" "$ROOT/dist/ftk-host.zip"; mkdir -p "$OUT"
 cp "$ROOT"/{host-setup-mac.command,host-setup-windows.ps1,host-setup-windows.cmd,START-HERE.md,README.md} "$OUT/"
 cp "$KEY.pub" "$OUT/teammate.pub"
-MIG="${FTK_MIGRATION_DIR:-$ROOT/migration}"   # optional: MIGRATION.md, migration-worker.md, setup-migration-env.sh - shipped verbatim
+MIG="${FTK_MIGRATION_DIR:-$ROOT/migration}"   # optional: MIGRATION.md, migration-worker.md, migration-unit.SKILL.md, setup-migration-env.sh - shipped verbatim
 if [ -d "$MIG" ]; then
-  for f in MIGRATION.md migration-worker.md setup-migration-env.sh; do
+  for f in MIGRATION.md migration-worker.md migration-unit.SKILL.md setup-migration-env.sh; do
     [ -f "$MIG/$f" ] || { echo "missing $MIG/$f"; exit 1; }
     cp "$MIG/$f" "$OUT/$f"
   done

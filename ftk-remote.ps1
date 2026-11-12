@@ -4,6 +4,8 @@
 # The client calls:  powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\ftk\ftk-remote.ps1 [-s lane] <cmd> [arg...]
 # Arguments are plain words or base64 (no quoting problems). Windows PowerShell 5.1 compatible, ASCII only.
 $ErrorActionPreference = 'Continue'
+$FtkVersion = '2026.11.12.4'   # bump on every release; hosts update themselves from GitHub
+$FtkRaw = if ($env:FTK_UPDATE_URL) { $env:FTK_UPDATE_URL } else { 'https://raw.githubusercontent.com/max200pl/ftk-remote/main/ftk-remote.ps1' }
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false) } catch { }
 $U8 = New-Object Text.UTF8Encoding($false)
 $IsWin = ($env:OS -eq 'Windows_NT')
@@ -33,6 +35,15 @@ $Ntfy = if ($env:FTK_NTFY_URL) { $env:FTK_NTFY_URL } else { 'https://ntfy.sh' }
 function Write-Utf8([string]$path, [string]$text) {
     $d = Split-Path $path -Parent; if ($d -and -not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
     [IO.File]::WriteAllText($path, $text, $U8)
+}
+function Read-Lines([string]$path) {   # read while another process is writing (the turn writer shares ReadWrite)
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    try {
+        $fs = New-Object IO.FileStream($path, 'Open', 'Read', 'ReadWrite')
+        $sr = New-Object IO.StreamReader($fs, $U8)
+        $txt = $sr.ReadToEnd(); $sr.Close()
+        return @($txt -split "`r?`n" | Where-Object { $_ -ne '' })
+    } catch { return @() }
 }
 function Say([string]$t) { [Console]::Out.WriteLine($t) }   # inside functions: print without polluting the return value
 function Read-Text([string]$path) { if (Test-Path -LiteralPath $path) { return ([IO.File]::ReadAllText($path)).Trim() } else { return '' } }
@@ -96,7 +107,7 @@ function Short([string]$s, [int]$k) { $s = ($s -replace '\s+', ' ').Trim(); if (
 function Render-Stream([string]$path) {
     $out = New-Object Collections.Generic.List[string]
     if (-not (Test-Path -LiteralPath $path)) { return $out }
-    foreach ($line in [IO.File]::ReadAllLines($path, $U8)) {
+    foreach ($line in (Read-Lines $path)) {
         if (-not $line.Trim()) { continue }
         try { $e = $line | ConvertFrom-Json } catch { continue }
         switch ([string]$e.type) {
@@ -128,6 +139,48 @@ function Render-Stream([string]$path) {
         }
     }
     return $out
+}
+
+# ---- snapshot of all agents for the progress window / monitor-text
+function All-Lanes {
+    $r = @()
+    if ((Test-Path $MainProjectFile) -or (Test-Path (Join-Path (Join-Path $FTK 'lanes') 'ftk'))) { $r += 'ftk' }
+    $r += @(Get-ChildItem -Path $FTK -Filter 'project-ftk-*' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name.Substring(8) })
+    return $r
+}
+function Lane-Info([string]$s) {
+    $ld = Join-Path (Join-Path $FTK 'lanes') $s
+    $raw = Read-Text (Join-Path $FTK "state-$s")
+    $word = Get-StateWord $s; if (-not $word) { $word = 'idle' }
+    $since = 0; $parts = $raw -split ' '; if ($parts.Count -ge 2 -and $parts[1] -match '^\d+$') { $since = (Now) - [int64]$parts[1] }
+    $pf = if ($s -eq 'ftk') { $MainProjectFile } else { Join-Path $FTK "project-$s" }
+    $steps = 0; $now = ''
+    $out = Join-Path $ld 'out.jsonl'
+    if (Test-Path -LiteralPath $out) {
+        foreach ($line in (Read-Lines $out)) {
+            if ($line -match '"type":\s*"tool_use"') { $steps += ([regex]::Matches($line, '"type":\s*"tool_use"')).Count }
+        }
+        $r = @(Render-Stream $out | Where-Object { $_ -match '^(tool_use|assistant|result)' })
+        if ($r.Count) { $now = $r[-1] }
+    }
+    $label = switch ($word) { 'busy' { 'working' } 'stop' { 'finished turn' } 'stopped' { 'stopped' } 'error' { 'error' } default { $word } }
+    return [pscustomobject]@{ Name = (Lane-Name $s); State = $word; Label = $label; Seconds = $since; Steps = $steps; Now = $now; Folder = $(if (Read-Text $pf) { Split-Path (Read-Text $pf) -Leaf } else { '' }); Lane = $s }
+}
+function Fmt-Time([int64]$sec) { if ($sec -lt 60) { return "${sec}s" }; if ($sec -lt 3600) { return ('{0}m {1:00}s' -f [math]::Floor($sec / 60), ($sec % 60)) }; return ('{0}h {1:00}m' -f [math]::Floor($sec / 3600), [math]::Floor(($sec % 3600) / 60)) }
+function Nice-Now([string]$t) {
+    if ($t -match '^tool_use (\S+): (.*)$') {
+        $tool = $Matches[1]; $what = $Matches[2]
+        switch -Regex ($tool) {
+            '^(Bash|PowerShell)$' { return "Running: $what" }
+            '^Read$' { return "Reading: $what" }
+            '^(Write|Edit|MultiEdit)$' { return "Editing: $what" }
+            '^(Grep|Glob)$' { return "Searching: $what" }
+            default { return "${tool}: $what" }
+        }
+    }
+    if ($t -match '^assistant: (.*)$') { return "Says: $($Matches[1])" }
+    if ($t -match '^result') { return 'Turn finished' }
+    return $t
 }
 
 function Check-Branch([string]$b) {
@@ -219,15 +272,16 @@ switch ($cmd) {
         $bytes = $U8.GetBytes([IO.File]::ReadAllText($msg, $U8))
         $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length); $p.StandardInput.Close()
         $errTask = $p.StandardError.ReadToEndAsync()
-        $w = New-Object IO.StreamWriter($outF, $false, $U8)
+        $wfs = New-Object IO.FileStream($outF, 'Create', 'Write', 'ReadWrite')   # readers (peek, monitor) may read while we write
+        $w = New-Object IO.StreamWriter($wfs, $U8)
         while ($null -ne ($line = $p.StandardOutput.ReadLine())) { $w.WriteLine($line); $w.Flush() }
         $w.Close(); $p.WaitForExit(); $code = $p.ExitCode
         $err = $errTask.Result; if ($err) { Write-Utf8 (Join-Path $LaneDir 'stderr.txt') $err }
     } catch { Write-Utf8 (Join-Path $LaneDir 'stderr.txt') "$($_.Exception.Message)" }
     $final = 'error'
     if (Test-Path -LiteralPath $outF) {
-        [IO.File]::AppendAllText((Join-Path $LaneDir 'history.jsonl'), [IO.File]::ReadAllText($outF, $U8), $U8)
-        foreach ($line in [IO.File]::ReadAllLines($outF, $U8)) {
+        [IO.File]::AppendAllText((Join-Path $LaneDir 'history.jsonl'), (((Read-Lines $outF) -join "`n") + "`n"), $U8)
+        foreach ($line in (Read-Lines $outF)) {
             try { $e = $line | ConvertFrom-Json } catch { continue }
             if ($e.session_id) { Write-Utf8 (Join-Path $LaneDir 'session-id') ([string]$e.session_id) }
             if ($e.type -eq 'result' -and -not $e.is_error -and $code -eq 0) { $final = 'stop' }
@@ -264,7 +318,7 @@ switch ($cmd) {
     $hf = Join-Path $LaneDir 'history.jsonl'
     if (-not (Test-Path $hf)) { Write-Output 'no transcript yet'; break }
     Write-Output "# $hf"
-    if ((A 2) -eq 'raw') { [IO.File]::ReadAllLines($hf, $U8) | Select-Object -Last ([int]$n) }
+    if ((A 2) -eq 'raw') { Read-Lines $hf | Select-Object -Last ([int]$n) }
     else { @(Render-Stream $hf) | Select-Object -Last ([int]$n) }
 }
 'key' {
@@ -319,6 +373,101 @@ switch ($cmd) {
     if (-not $env:ProgramData -or -not (Test-Path -LiteralPath $f)) { Write-Output 'no setup log on this machine'; break }
     Get-Content -LiteralPath $f -Tail ([int]$n)
 }
+{ $_ -eq 'monitor' -or $_ -eq 'monitor-text' } {   # one text snapshot of all agents (what the progress window shows)
+    $l = @(All-Lanes | ForEach-Object { Lane-Info $_ })
+    $busy = @($l | Where-Object { $_.State -eq 'busy' }).Count
+    Write-Output ("{0} agent(s), {1} working" -f $l.Count, $busy)
+    foreach ($x in $l) { Write-Output ('{0,-8} {1,-13} {2,8}  steps {3,-3} {4}' -f $x.Name, $x.Label, (Fmt-Time $x.Seconds), $x.Steps, (Short (Nice-Now $x.Now) 90)) }
+}
+'show-monitor' {   # open the progress window on the logged-in user's desktop (from SSH: via an interactive task)
+    if (-not $IsWin) { Write-Output 'show-monitor works on a Windows host only'; exit 2 }
+    $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $act = New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" autostart')
+    $who = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $pr = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive
+    Register-ScheduledTask -TaskName 'FTK Agents window' -Action $act -Principal $pr -Force | Out-Null
+    Start-ScheduledTask -TaskName 'FTK Agents window'
+    Write-Output 'progress window opened on the host desktop (if the user is logged in)'
+}
+'monitor-window' {   # read-only progress window on this computer's desktop
+    Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
+    $appT = 'System.Windows.Forms.Application' -as [type]; $appT::EnableVisualStyles()
+    $f = New-Object Windows.Forms.Form
+    $f.Text = 'FTK - Claude agents on this computer'; $f.Size = New-Object Drawing.Size(860, 520); $f.StartPosition = 'CenterScreen'
+    $fst = 'System.Drawing.FontStyle' -as [type]; $bold = [Enum]::Parse($fst, 'Bold'); $regular = [Enum]::Parse($fst, 'Regular')
+    $f.Font = New-Object Drawing.Font('Segoe UI', [single]9.5, $regular)
+    $head = New-Object Windows.Forms.Label; $head.Dock = 'Top'; $head.Height = 34; $head.Font = New-Object Drawing.Font('Segoe UI', [single]12, $bold); $head.Padding = New-Object Windows.Forms.Padding(8, 6, 0, 0)
+    $bar = New-Object Windows.Forms.ProgressBar; $bar.Dock = 'Top'; $bar.Height = 14; $bar.Style = 'Marquee'; $bar.MarqueeAnimationSpeed = 30
+    $lv = New-Object Windows.Forms.ListView; $lv.Dock = 'Top'; $lv.Height = 170; $lv.View = 'Details'; $lv.FullRowSelect = $true; $lv.HideSelection = $false
+    foreach ($c in @(@('Agent', 90), @('Status', 110), @('Time', 80), @('Steps', 60), @('Now doing', 480))) { [void]$lv.Columns.Add($c[0], $c[1]) }
+    $box = New-Object Windows.Forms.TextBox; $box.Dock = 'Fill'; $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Vertical'; $box.Font = New-Object Drawing.Font('Consolas', [single]9, $regular)
+    $foot = New-Object Windows.Forms.Label; $foot.Dock = 'Bottom'; $foot.Height = 24; $foot.Padding = New-Object Windows.Forms.Padding(8, 4, 0, 0)
+    $foot.Text = 'Read-only view. Your teammate drives the agents remotely. You can close this window any time - the agents keep working.'
+    $f.Controls.Add($box); $f.Controls.Add($lv); $f.Controls.Add($bar); $f.Controls.Add($head); $f.Controls.Add($foot)
+    $script:sel = ''
+    $lv.Add_SelectedIndexChanged({ if ($lv.SelectedItems.Count) { $script:sel = $lv.SelectedItems[0].Tag } })
+    $refresh = {
+        $l = @(All-Lanes | ForEach-Object { Lane-Info $_ })
+        $busy = @($l | Where-Object { $_.State -eq 'busy' })
+        $head.Text = if ($busy.Count) { "$($busy.Count) of $($l.Count) agent(s) working..." } elseif ($l.Count) { "All $($l.Count) agent(s) idle - waiting for the next task" } else { 'No agents yet' }
+        $bar.Style = if ($busy.Count) { 'Marquee' } else { 'Continuous' }; if (-not $busy.Count) { $bar.Value = $bar.Maximum }
+        $lv.BeginUpdate(); $lv.Items.Clear()
+        foreach ($x in $l) {
+            $it = New-Object Windows.Forms.ListViewItem($x.Name); $it.Tag = $x.Lane
+            [void]$it.SubItems.Add($x.Label); [void]$it.SubItems.Add((Fmt-Time $x.Seconds)); [void]$it.SubItems.Add([string]$x.Steps); [void]$it.SubItems.Add((Short (Nice-Now $x.Now) 120))
+            if ($x.State -eq 'busy') { $it.ForeColor = 'DarkGreen' } elseif ($x.State -eq 'error') { $it.ForeColor = 'DarkRed' }
+            [void]$lv.Items.Add($it); if ($x.Lane -eq $script:sel) { $it.Selected = $true }
+        }
+        $lv.EndUpdate()
+        $show = $script:sel; if (-not $show -and $busy.Count) { $show = $busy[0].Lane }; if (-not $show -and $l.Count) { $show = $l[0].Lane }
+        if ($show) {
+            $lines = @(Render-Stream (Join-Path (Join-Path (Join-Path $FTK 'lanes') $show) 'out.jsonl') | Select-Object -Last 14 | ForEach-Object { Short (Nice-Now $_) 160 })
+            $box.Text = "[$(Lane-Name $show)] current / last turn:`r`n" + ($lines -join "`r`n")
+        }
+    }
+    $t = New-Object Windows.Forms.Timer; $t.Interval = 2000; $t.Add_Tick($refresh); $t.Start()
+    & $refresh
+    [void]$f.ShowDialog()
+}
+'version' { Write-Output $FtkVersion }
+'update' {   # update [quiet]: replace this helper with the newest version from GitHub (only if newer and it parses)
+    $quiet = ((A 1) -eq 'quiet')
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("ftk-remote-" + [guid]::NewGuid().ToString('N') + '.ps1')
+    try { Invoke-WebRequest -UseBasicParsing -Uri $FtkRaw -OutFile $tmp -TimeoutSec 20 } catch { if (-not $quiet) { Write-Output "update check failed: $($_.Exception.Message)" }; break }
+    $txt = [IO.File]::ReadAllText($tmp)
+    $m = [regex]::Match($txt, "\`$FtkVersion = '([0-9.]+)'")
+    $errs = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$null, [ref]$errs)
+    if (-not $m.Success -or $errs) { Remove-Item $tmp -ErrorAction SilentlyContinue; if (-not $quiet) { Write-Output 'update skipped: downloaded file is not a valid helper' }; break }
+    $new = $m.Groups[1].Value
+    if ([version]$new -le [version]$FtkVersion) { Remove-Item $tmp -ErrorAction SilentlyContinue; if (-not $quiet) { Write-Output "up to date ($FtkVersion)" }; break }
+    try { Copy-Item $tmp $PSCommandPath -Force; Write-Output "updated $FtkVersion -> $new" } catch { Write-Output "update failed (no write access to $PSCommandPath): $($_.Exception.Message)" }
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+}
+'autostart' {   # what the desktop / startup shortcut runs: update quietly, then show the progress window
+    $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath update quiet | Out-Null
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath monitor-window
+}
+'install-shortcuts' {   # "FTK Agents" on the Desktop and in Startup (opens at every logon)
+    if (-not $IsWin) { Write-Output 'Windows only'; exit 2 }
+    $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $sh = New-Object -ComObject WScript.Shell
+    foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Startup'))) {
+        # WScript.Shell cannot save to non-ANSI paths (e.g. a Cyrillic OneDrive desktop): save to temp, then move
+        $tmpL = Join-Path ([IO.Path]::GetTempPath()) ('ftk-' + [guid]::NewGuid().ToString('N') + '.lnk')
+        $lnk = $sh.CreateShortcut($tmpL)
+        $lnk.TargetPath = $ps
+        $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" autostart'
+        $lnk.Description = 'Claude agents on this computer: progress (read-only); also checks for updates'
+        $lnk.IconLocation = "$env:windir\System32\shell32.dll,22"
+        $lnk.Save()
+        Move-Item -LiteralPath $tmpL -Destination (Join-Path $dir 'FTK Agents.lnk') -Force
+        Write-Output "shortcut: $(Join-Path $dir 'FTK Agents.lnk')"
+    }
+    # let the logged-in user update the helper (the folder was created by an elevated setup)
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe (Split-Path $PSCommandPath -Parent) /grant "${me}:(OI)(CI)M" /C /Q 2>&1 | Out-Null
+}
 'start' { New-Item -ItemType Directory -Force -Path $LaneDir | Out-Null; Write-Output "ready: $S (headless - the agent runs when you say something)" }
 'restart' {
     if (Stop-Turn) { Write-Output 'stopped the running turn' }
@@ -346,6 +495,16 @@ switch ($cmd) {
     $f = Xfer-Path (A 1); if (-not $f) { [Console]::Error.WriteLine('bad path'); exit 2 }
     if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { [Console]::Error.WriteLine("no such file: $f"); exit 1 }
     [Console]::Out.Write([Convert]::ToBase64String([IO.File]::ReadAllBytes($f))); [Console]::Out.WriteLine()
+}
+'xfer-prep' {   # xfer-prep <b64 rel>: create the folder for an scp upload into ~/.ftk/xfer
+    $f = Xfer-Path (A 1); if (-not $f) { Write-Output 'bad path (letters, digits . _ - /, relative, no ..)'; exit 2 }
+    $dir = Split-Path $f -Parent; if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    Write-Output 'ok'
+}
+'xfer-hash' {   # xfer-hash <b64 rel>: size + sha256 of a file in ~/.ftk/xfer
+    $f = Xfer-Path (A 1); if (-not $f) { Write-Output 'bad path'; exit 2 }
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { Write-Output "no such file: $f"; exit 1 }
+    Write-Output "saved $f $((Get-Item -LiteralPath $f).Length) bytes sha256 $((Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower())"
 }
 'xfer' {
     New-Item -ItemType Directory -Force -Path $Xfer | Out-Null
@@ -437,6 +596,6 @@ switch ($cmd) {
     Write-Output 'No live terminal on a Windows host (the agent runs headless). Use: peek, log, wait, say.'; exit 2
 }
 default {
-    Write-Output 'usage: ftk-remote.ps1 [-s lane] say|wait|peek|log|setup-log|key|status|lanes|run|start|restart|setproject|put|get|xfer|git|checkout|new-lane|clone|unbundle|set-topic|notify'
+    Write-Output 'usage: ftk-remote.ps1 [-s lane] say|wait|peek|log|setup-log|monitor|monitor-window|show-monitor|version|update|autostart|install-shortcuts|key|status|lanes|run|start|restart|setproject|put|get|xfer|git|checkout|new-lane|clone|unbundle|set-topic|notify'
 }
 }

@@ -4,6 +4,8 @@
 # Arguments are always plain words or base64, so no quoting problems
 # across PowerShell -> ssh -> cmd -> wsl -> bash.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+FTK_VERSION="2026.11.12.4"   # bump on every release; hosts update themselves from GitHub
+FTK_RAW="${FTK_UPDATE_URL:-https://raw.githubusercontent.com/max200pl/ftk-remote/main/ftk-remote.sh}"
 
 # ---- session (lane) selection: no -s = main session "ftk", -s a1 = "ftk-a1"
 S="${FTK_SESSION:-ftk}"
@@ -201,6 +203,11 @@ case "$1" in
     f="$(xfer_path "$2")" || exit 2
     [ -f "$f" ] || { echo "no such file: $f" >&2; exit 1; }
     base64 < "$f" ;;
+  xfer-prep)  # create the folder for an scp upload into ~/.ftk/xfer
+    f="$(xfer_path "$2")" || exit 2; mkdir -p "$(dirname "$f")" && echo ok ;;
+  xfer-hash)  # size + sha256 of a file in ~/.ftk/xfer
+    f="$(xfer_path "$2")" || exit 2; [ -f "$f" ] || { echo "no such file: $f"; exit 1; }
+    echo "saved $f $(wc -c < "$f" | tr -d ' ') bytes sha256 $(sha256 "$f")" ;;
   xfer)       # list ~/.ftk/xfer
     mkdir -p "$XFER"; echo "# $XFER"; (cd "$XFER" && find . -type f | sed 's|^\./||' | sort) ;;
   clone)      # clone <b64 url> <b64 branch|-> <b64 parent dir>  -> single-branch clone, sets the main project
@@ -304,10 +311,46 @@ PY
     ;;
   setup-log)  # the host setup output (mac: Terminal shows it; nothing is kept)
     echo "no setup log on a Mac host (the setup runs in Terminal)" ;;
+  monitor|monitor-text)  # snapshot of all agents: status, time in state, what each did last
+    n=0; w=0; rows=""
+    for f in "$FTK"/project "$FTK"/project-ftk-*; do
+      [ -f "$f" ] || continue
+      s="${f##*/project-}"; [ "$f" = "$MAIN_PROJECT_FILE" ] && s=ftk
+      st="$(cut -d' ' -f1 "$FTK/state-$s" 2>/dev/null)"; ts="$(cut -d' ' -f2 "$FTK/state-$s" 2>/dev/null)"
+      T has-session -t "=$s" 2>/dev/null || st="${st:-stopped}"
+      case "$st" in busy) lab="working"; w=$((w+1));; stop) lab="finished turn";; waiting) lab="NEEDS INPUT";; ""|started) lab="idle";; *) lab="$st";; esac
+      el=""; [ -n "$ts" ] && el="$(( $(date +%s) - ts ))s"
+      last="$(transcript_text "$(cat "$f")" 40 2>/dev/null | grep -E '^(tool_use|assistant)' | tail -1 | sed -E 's/^tool_use (Bash|PowerShell): /Running: /; s/^tool_use (Read): /Reading: /; s/^tool_use (Write|Edit|MultiEdit): /Editing: /; s/^assistant: /Says: /' | cut -c1-90)"
+      name="${s#ftk}"; name="${name#-}"; [ -z "$name" ] && name=main
+      rows="$rows$(printf '%-8s %-13s %8s  %s' "$name" "$lab" "$el" "$last")"$'\n'
+      n=$((n+1))
+    done
+    echo "$n agent(s), $w working"; printf '%s' "$rows" ;;
+  version) echo "$FTK_VERSION" ;;
+  update)     # update [quiet]: replace this helper with the newest version from GitHub (only if newer and valid)
+    tmp="$(mktemp)"
+    if ! curl -fsS -m 20 "$FTK_RAW" -o "$tmp"; then rm -f "$tmp"; [ "$2" = quiet ] || echo "update check failed"; exit 0; fi
+    new="$(sed -n 's/^FTK_VERSION="\([0-9.]*\)".*/\1/p' "$tmp" | head -1)"
+    if [ -z "$new" ] || ! bash -n "$tmp" 2>/dev/null; then rm -f "$tmp"; [ "$2" = quiet ] || echo "update skipped: downloaded file is not a valid helper"; exit 0; fi
+    if [ "$(printf '%s\n%s\n' "$new" "$FTK_VERSION" | sort -V | tail -1)" = "$FTK_VERSION" ]; then rm -f "$tmp"; [ "$2" = quiet ] || echo "up to date ($FTK_VERSION)"; exit 0; fi
+    chmod +x "$tmp" && mv "$tmp" "$SELF" && echo "updated $FTK_VERSION -> $new" ;;
+  autostart)  # LaunchAgent / desktop shortcut: update quietly, start the session, show the progress window
+    "$SELF" update quiet >/dev/null 2>&1
+    "$SELF" start >/dev/null
+    [ "$2" = "noui" ] || "$SELF" show-monitor >/dev/null 2>&1 ;;
+  monitor-live)  # refreshing view for this computer's Terminal (read-only)
+    while :; do
+      clear; echo "FTK - Claude agents on this computer      $(date +%H:%M:%S)"
+      echo "Read-only. Your teammate drives the agents remotely. Close this window any time."; echo
+      "$SELF" monitor
+      sleep 2
+    done ;;
+  show-monitor)  # open the live view in a Terminal window on this Mac's screen
+    osascript -e "tell application \"Terminal\" to do script \"'$SELF' monitor-live\"" -e 'tell application "Terminal" to activate' >/dev/null && echo "progress window opened" ;;
   attach)     # read-only view
     exec tmux ${FTK_TMUX:+-L "$FTK_TMUX"} attach -r -t "$X" ;;
   drive)      # full control (you can type)
     exec tmux ${FTK_TMUX:+-L "$FTK_TMUX"} attach -t "$X" ;;
   *)
-    echo "usage: ftk-remote [-s lane] peek|say|key|wait|log|status|lanes|run|start|restart|new-lane|clone|unbundle|checkout|git|setproject|put|get|xfer|set-topic|notify|install-hooks|attach|drive" ;;
+    echo "usage: ftk-remote [-s lane] peek|say|key|wait|log|status|lanes|monitor|monitor-live|show-monitor|run|start|restart|new-lane|clone|unbundle|checkout|git|setproject|put|get|xfer|set-topic|notify|install-hooks|attach|drive" ;;
 esac
