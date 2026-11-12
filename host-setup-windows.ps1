@@ -273,19 +273,30 @@ function Read-Lines([string]$path) {   # read while another process is writing (
         return @($txt -split "`r?`n" | Where-Object { $_ -ne '' })
     } catch { return @() }
 }
-function Verify-Release([string]$file, [string]$sig, [string]$signers) {   # ssh-keygen -Y verify, message on stdin
+function Verify-Release([string]$file, [string]$sig, [string]$signers) {   # ssh-keygen -Y verify; never hangs (30 s cap)
     if (-not (Test-Path $sig)) { return $false }
-    $kg = if ($IsWin) { Join-Path $env:windir 'System32\OpenSSH\ssh-keygen.exe' } else { 'ssh-keygen' }
     $psi = New-Object Diagnostics.ProcessStartInfo
-    $psi.FileName = $kg
-    $psi.Arguments = '-Y verify -f "' + $signers + '" -I ftk-release -n ftk-update -s "' + $sig + '"'
-    $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    if ($IsWin) {
+        # Windows OpenSSH's ssh-keygen hangs on -Y verify with redirected stdin; Git for Windows' ssh-keygen works (via Git Bash)
+        $bash = Bash-Path; if (-not $bash) { return $false }
+        $q = { param($x) "'" + ($x -replace '\\', '/') + "'" }
+        $script = Join-Path ([IO.Path]::GetTempPath()) ('ftk-verify-' + [guid]::NewGuid().ToString('N') + '.sh')
+        Write-Utf8 $script ("ssh-keygen -Y verify -f " + (& $q $signers) + " -I ftk-release -n ftk-update -s " + (& $q $sig) + " < " + (& $q $file) + " >/dev/null 2>&1`n")
+        $psi.FileName = $bash; $psi.Arguments = '"' + ($script -replace '\\', '/') + '"'
+    } else {
+        $psi.FileName = 'ssh-keygen'
+        $psi.Arguments = '-Y verify -f "' + $signers + '" -I ftk-release -n ftk-update -s "' + $sig + '"'
+        $psi.RedirectStandardInput = $true
+    }
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
     try {
         $p = [Diagnostics.Process]::Start($psi)
-        $b = [IO.File]::ReadAllBytes($file); $p.StandardInput.BaseStream.Write($b, 0, $b.Length); $p.StandardInput.Close()
-        [void]$p.StandardOutput.ReadToEnd(); [void]$p.StandardError.ReadToEnd(); $p.WaitForExit()
+        if (-not $IsWin) { $b = [IO.File]::ReadAllBytes($file); $p.StandardInput.BaseStream.Write($b, 0, $b.Length); $p.StandardInput.Close() }
+        $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(30000)) { try { $p.Kill() } catch { }; return $false }
         return ($p.ExitCode -eq 0)
     } catch { return $false }
+    finally { if ($script) { Remove-Item -LiteralPath $script -ErrorAction SilentlyContinue } }
 }
 function Say([string]$t) { [Console]::Out.WriteLine($t) }   # inside functions: print without polluting the return value
 function Read-Text([string]$path) { if (Test-Path -LiteralPath $path) { return ([IO.File]::ReadAllText($path)).Trim() } else { return '' } }
