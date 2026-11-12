@@ -15,12 +15,22 @@ $NtfyTopic  = ''   # ntfy.sh topic for "ready" / "agent needs you" pushes (packa
 # ==============================================================
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
+# ---------- always run as 64-bit PowerShell ----------
+# A 32-bit parent (e.g. an x86 pwsh) starts 32-bit powershell: ProgramFiles points to "Program Files (x86)",
+# and DISM/Add-WindowsCapability and wsl.exe do not work under WOW64. Relaunch through Sysnative.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $ps64 = Join-Path $env:windir 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    Start-Process $ps64 -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    exit
+}
+$PF = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }   # real "Program Files"
+
 # ---------- run as Administrator ----------
 $me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $Auto = ($env:FTK_AUTO -eq '1')   # non-interactive: no dialogs, defaults everywhere (for an agent running the setup)
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     if ($Auto) { Write-Host 'ERROR: FTK_AUTO=1 needs an elevated (Administrator) PowerShell.'; exit 1 }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    Start-Process (Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
 
@@ -109,7 +119,7 @@ Continue anyway? (YES = continue now, NO = stop and update first)
 
 # ---------- Step 1: Tailscale ----------
 Mark 'Step 1/8 Tailscale'
-$ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+$ts = Join-Path $PF 'Tailscale\tailscale.exe'
 if (-not (Test-Path $ts)) {
     Write-Host 'Installing Tailscale...'
     try { & winget.exe install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements } catch { }
@@ -572,11 +582,11 @@ if ($provided) {
     Write-Host 'Repo is ready (bundled) or will be provided by your teammate - skipping the clone.'
 } else {
 # git inside Ubuntu uses the Windows Git Credential Manager -> normal browser login for Azure DevOps / GitHub
-$gcm = @("$env:ProgramFiles\Git\mingw64\bin\git-credential-manager.exe", "$env:ProgramFiles\Git\mingw64\libexec\git-core\git-credential-manager.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+$gcm = @("$PF\Git\mingw64\bin\git-credential-manager.exe", "$PF\Git\mingw64\libexec\git-core\git-credential-manager.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $gcm) {
     Write-Host 'Installing Git for Windows (for its credential manager)...'
     try { & winget.exe install --id Git.Git -e --accept-source-agreements --accept-package-agreements } catch { }
-    $gcm = @("$env:ProgramFiles\Git\mingw64\bin\git-credential-manager.exe", "$env:ProgramFiles\Git\mingw64\libexec\git-core\git-credential-manager.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $gcm = @("$PF\Git\mingw64\bin\git-credential-manager.exe", "$PF\Git\mingw64\libexec\git-core\git-credential-manager.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 if ($gcm) {
     $gcmWsl = ((& wsl.exe -e wslpath -a ($gcm -replace '\\', '/')) | Out-String).Trim() -replace ' ', '\ '

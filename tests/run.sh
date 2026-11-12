@@ -119,6 +119,11 @@ check "admin key file ACL uses SIDs (works on any Windows language)" \
   grep -q "/grant '\*S-1-5-32-544:F' /grant '\*S-1-5-18:F'" "$ROOT/host-setup-windows.ps1"
 check "every git clone is --single-branch" bash -c "! grep -n 'git clone' '$ROOT/ftk-remote.sh' | grep -v -- '--single-branch'"
 check "no 'fetch --all' anywhere" bash -c "! grep -rn 'fetch --all' '$ROOT'/*.sh '$ROOT'/*.command '$ROOT'/*.ps1"
+for f in host-setup-windows client-setup-windows; do
+  check "$f.ps1 relaunches itself as 64-bit (Sysnative)" bash -c "grep -q 'Is64BitProcess' '$ROOT/$f.ps1' && grep -q 'Sysnative' '$ROOT/$f.ps1'"
+  check "$f.cmd prefers Sysnative powershell" grep -q 'Sysnative' "$ROOT/$f.cmd"
+  check "$f.ps1 uses ProgramW6432 for Program Files" bash -c "grep -q 'ProgramW6432' '$ROOT/$f.ps1' && ! grep -q 'Join-Path \\\$env:ProgramFiles' '$ROOT/$f.ps1'"
+done
 check "Windows client ssh config has no ControlMaster" \
   bash -c "! grep -q 'ControlMaster auto' '$ROOT/client-setup-windows.ps1'"
 

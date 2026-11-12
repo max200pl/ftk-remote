@@ -7,6 +7,16 @@
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
+# ---------- always run as 64-bit PowerShell ----------
+# A 32-bit parent (e.g. an x86 pwsh) starts 32-bit powershell: ProgramFiles points to "Program Files (x86)",
+# and DISM/Add-WindowsCapability and wsl.exe do not work under WOW64. Relaunch through Sysnative.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $ps64 = Join-Path $env:windir 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    Start-Process $ps64 -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    exit
+}
+$PF = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }   # real "Program Files"
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 $Title = 'FTK Remote - Client setup (Windows)'
@@ -50,7 +60,7 @@ Click OK to start.
 "@
 
 # ---------- Step 1: Tailscale ----------
-$ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+$ts = Join-Path $PF 'Tailscale\tailscale.exe'
 if (-not (Test-Path $ts)) {
     Write-Host 'Installing Tailscale...'
     try { & winget.exe install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements } catch { }
