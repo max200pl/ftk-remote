@@ -54,6 +54,8 @@ $ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
 if (-not (Test-Path $ts)) {
     Write-Host 'Installing Tailscale...'
     try { & winget.exe install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements } catch { }
+    # winget can return before the MSI has placed tailscale.exe - wait for it (up to 90 s)
+    for ($i = 0; $i -lt 90 -and -not (Test-Path $ts); $i++) { Start-Sleep -Seconds 1 }
     if (-not (Test-Path $ts)) {
         Start-Process 'https://tailscale.com/download/windows'
         Step "Step 1/4 - Tailscale`n`nThe download page is open. Install Tailscale, then click OK."
