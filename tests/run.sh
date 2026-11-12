@@ -180,7 +180,7 @@ assert len(h['Stop'])==1 and len(h['Notification'])==1
 assert 'ftk-remote' in h['Stop'][0]['hooks'][0]['command'] and h['Stop'][0]['hooks'][0]['command'].endswith('notify stop')"
 check "LaunchAgent written and valid" bash -c "plutil -lint '$HOME/Library/LaunchAgents/com.ftk.agent.plist' && grep -q '$HOME/.ftk/ftk-remote' '$HOME/Library/LaunchAgents/com.ftk.agent.plist'"
 check "host setup trusts the teammate key for signed updates" grep -q '^ftk-release namespaces="ftk-update" ssh-ed25519 ' "$HOME/.ftk/allowed_signers"
-check "Windows setup makes sshd key-only" grep -q 'PasswordAuthentication no' "$ROOT/host-setup-windows.ps1"
+check "Windows setup makes sshd key-only (password + keyboard-interactive off)" bash -c "grep -q \"'PasswordAuthentication', 'KbdInteractiveAuthentication'\" '$ROOT/host-setup-windows.ps1'"
 check "authorized_keys mode 600" bash -c "[ \"\$(stat -f %Lp '$HOME/.ssh/authorized_keys')\" = 600 ]"
 check "installed helper == ftk-remote.sh" cmp "$R" "$ROOT/ftk-remote.sh"
 REPO="$FTK_PROJECT/demo-toolkit"

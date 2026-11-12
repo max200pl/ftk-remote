@@ -183,9 +183,11 @@ Set-Service sshd -StartupType Automatic -ErrorAction Stop
 # keys only: no password logins on this SSH server
 $sshdCfg = Join-Path $env:ProgramData 'ssh\sshd_config'
 if (Test-Path $sshdCfg) {
-    $c = [IO.File]::ReadAllText($sshdCfg)
-    $c2 = [regex]::Replace($c, '(?m)^\s*#?\s*PasswordAuthentication\s+\S+', 'PasswordAuthentication no')
-    if ($c2 -notmatch '(?m)^PasswordAuthentication no') { $c2 = "PasswordAuthentication no`r`n" + $c2 }
+    $c = [IO.File]::ReadAllText($sshdCfg); $c2 = $c
+    foreach ($k in @('PasswordAuthentication', 'KbdInteractiveAuthentication')) {
+        $c2 = [regex]::Replace($c2, "(?m)^\s*#?\s*$k\s+\S+", "$k no")
+        if ($c2 -notmatch "(?m)^$k no") { $c2 = "$k no`r`n" + $c2 }
+    }
     if ($c2 -ne $c) { [IO.File]::WriteAllText($sshdCfg, $c2, (New-Object Text.UTF8Encoding($false))); Write-Host 'sshd: password logins switched off (keys only)' }
 }
 Restart-Service sshd -ErrorAction SilentlyContinue
