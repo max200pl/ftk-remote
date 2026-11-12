@@ -13,10 +13,16 @@ NTFY_TOPIC="${FTK_NTFY_TOPIC:-$NTFY_TOPIC}"
 REPO_URL="${FTK_REPO_URL-$REPO_URL}"; REPO_BRANCH="${FTK_REPO_BRANCH-$REPO_BRANCH}"   # tests override (also with empty)
 
 TITLE="FTK Remote - Host setup (Mac)"
+# live progress for the teammate: ntfy topic from the config line or from a file "ntfy-topic" next to this script
+_KD="$(cd "$(dirname "$0")" && pwd)"
+[ -z "$NTFY_TOPIC" ] && [ -f "$_KD/ntfy-topic" ] && NTFY_TOPIC="$(tr -d '[:space:]' < "$_KD/ntfy-topic")"
+[[ "$NTFY_TOPIC" =~ ^[A-Za-z0-9_-]{8,64}$ ]] || NTFY_TOPIC=""
+progress() { [ -n "$NTFY_TOPIC" ] && curl -fsS -m 8 -H "Title: FTK setup ($(hostname -s)): $1" -H "Tags: gear" -d "$2" "${FTK_NTFY_URL:-https://ntfy.sh}/$NTFY_TOPIC" >/dev/null 2>&1; return 0; }
 TS_CLI="${FTK_TS_CLI:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}"
 
 # ---------- dialogs ----------
 step() { # step "message"  -> OK / Cancel (Cancel exits)
+  progress "$(printf '%s' "$1" | head -1)" "waiting for the user"
   osascript - "$1" "$TITLE" <<'OSA' >/dev/null || { echo "Cancelled."; exit 1; }
 on run argv
   display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Cancel", "OK"} default button "OK"
@@ -58,9 +64,9 @@ step "This will set up your Mac so your teammate can connect to your Claude Code
 Steps:
 1. Tailscale (private network, no port forwarding)
 2. Remote Login (SSH)
-3. tmux (keeps the agent running)
-4. Claude Code
-5. Add your teammate's SSH key
+3. Add your teammate's SSH key  -> your teammate can connect from here on
+4. tmux (keeps the agent running)
+5. Claude Code
 6. Clone the repo + switch to the branch
 7. Start the agent session
 8. Send the connection line back to your teammate
@@ -109,34 +115,7 @@ System Settings -> General -> Sharing is now open.
 done
 ssh_on || { info "Remote Login is still off. Turn it on and run this script again."; exit 1; }
 
-# ---------- Step 3: Homebrew + tmux ----------
-[ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
-[ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
-if ! command -v tmux >/dev/null; then
-  if ! command -v brew >/dev/null; then
-    step "Step 3/8 - Homebrew
-
-Homebrew (package manager) is needed to install tmux.
-It will now install in this Terminal window - it may ask for your Mac password.
-Click OK to continue."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
-    [ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
-  fi
-  echo "Installing tmux..."
-  brew install tmux || { info "tmux install failed - see the Terminal output."; exit 1; }
-fi
-
-# ---------- Step 4: Claude Code ----------
-export PATH="$HOME/.local/bin:$PATH"
-if ! command -v claude >/dev/null; then
-  echo "Installing Claude Code..."
-  curl -fsSL https://claude.ai/install.sh | bash
-  export PATH="$HOME/.local/bin:$PATH"
-  command -v claude >/dev/null || { info "Claude Code install failed - see the Terminal output."; exit 1; }
-fi
-
-# ---------- Step 5: teammate's SSH key ----------
+# ---------- Step 3: teammate's SSH key ----------
 KEY=""
 CLIP="$(pbpaste 2>/dev/null | head -1)"
 # teammate.pub shipped next to this script wins over the clipboard
@@ -144,7 +123,7 @@ PUBFILE="$(cd "$(dirname "$0")" && pwd)/teammate.pub"
 [ -f "$PUBFILE" ] && CLIP="$(head -1 "$PUBFILE" | tr -d '\r')"
 case "$CLIP" in ssh-ed25519\ *|ssh-rsa\ *) KEY="$CLIP";; esac
 while :; do
-  KEY="$(ask "Step 5/8 - Teammate's SSH key
+  KEY="$(ask "Step 3/8 - Teammate's SSH key
 
 Paste the public key your teammate sent you.
 It starts with 'ssh-ed25519 ...'" "$KEY")" || exit 1
@@ -462,6 +441,8 @@ json.dump(s, open(p, "w"), indent=2)
 print("hooks installed in " + p)
 PY
     ;;
+  setup-log)  # the host setup output (mac: Terminal shows it; nothing is kept)
+    echo "no setup log on a Mac host (the setup runs in Terminal)" ;;
   attach)     # read-only view
     exec tmux ${FTK_TMUX:+-L "$FTK_TMUX"} attach -r -t "$X" ;;
   drive)      # full control (you can type)
@@ -471,6 +452,39 @@ PY
 esac
 FTK_REMOTE_EOF
 chmod +x "$HOME/.ftk/ftk-remote"
+# ---------- the connection is ready: tell the teammate NOW ----------
+LINE="FTK|$TS_IP|$(whoami)|mac"
+printf '%s' "$LINE" | pbcopy
+"$HOME/.ftk/ftk-remote" notify ready "$(printf '%s' "$LINE" | base64 | tr -d '\n')" </dev/null
+progress "CONNECTION READY" "$LINE - you can connect now; the setup continues"
+
+# ---------- Step 4: Homebrew + tmux ----------
+[ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+[ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
+if ! command -v tmux >/dev/null; then
+  if ! command -v brew >/dev/null; then
+    step "Step 4/8 - Homebrew
+
+Homebrew (package manager) is needed to install tmux.
+It will now install in this Terminal window - it may ask for your Mac password.
+Click OK to continue."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+    [ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"
+  fi
+  echo "Installing tmux..."
+  brew install tmux || { info "tmux install failed - see the Terminal output."; exit 1; }
+fi
+
+# ---------- Step 5: Claude Code ----------
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v claude >/dev/null; then
+  echo "Installing Claude Code..."
+  curl -fsSL https://claude.ai/install.sh | bash
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v claude >/dev/null || { info "Claude Code install failed - see the Terminal output."; exit 1; }
+fi
+
 # ---------- Step 6: repository + branch ----------
 R="$HOME/.ftk/ftk-remote"
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
@@ -589,9 +603,8 @@ See START-HERE.md, section 'On a MacBook'."
 fi
 
 # ---------- Step 8: connection line ----------
-LINE="FTK|$TS_IP|$(whoami)|mac"
 printf '%s' "$LINE" | pbcopy
-"$R" notify ready "$(b64 "$LINE")" </dev/null
+progress "DONE" "$LINE"
 info "Step 8/8 - Done!
 
 Your teammate has been notified automatically.

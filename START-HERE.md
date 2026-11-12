@@ -6,8 +6,12 @@
 A teammate wants to use this computer for Claude Code agents working on a project migration, and to watch and steer those agents remotely. The setup script installs and configures:
 - **Tailscale:** a private network, so nothing is opened to the internet.
 - **SSH:** login only with the teammate's key (`teammate.pub` in this folder).
-- **tmux + Claude Code:** the agent runs in a session called `ftk` inside the cloned repo. The repo is cloned **single-branch** (`v2` only). The teammate can add more agents ("lanes"), each in its own git worktree.
-- **Notifications:** ntfy pushes to the teammate, sent when setup is done, when the agent finishes a turn, and when it needs input.
+- **The agent:**
+  - **Mac:** tmux + Claude Code; the agent runs in a session called `ftk`.
+  - **Windows:** Claude Code natively in **headless** mode. No WSL, no Ubuntu; it works in a VM too.
+  - The repo is single-branch (`v2` only). The teammate can add more agents ("lanes"), each in its own git worktree.
+- **Order:** Tailscale, SSH and the teammate's key come **first**. From that moment the teammate can connect and watch the rest of the setup.
+- **Notifications (optional, file `ntfy-topic` next to the scripts):** ntfy pushes to the teammate. They report the setup progress live (each step, waits, errors), when the connection is ready, when the setup is done, and when an agent finishes a turn.
 
 ## Windows: finish pending updates first
 If Windows shows "Update and restart" in the Power menu, do that **before** the setup. While an update is pending, OpenSSH Server and WSL often cannot be installed, and the script keeps asking for a restart. A plain restart does not apply the update.
@@ -37,13 +41,11 @@ If Windows shows "Update and restart" in the Power menu, do that **before** the 
    - **Repository:** choose **"Teammate sends it"** (Windows: **Yes**). The teammate copies the code over SSH, so no git login is needed here.
      - Only if the teammate asked you to clone it yourself, choose "Clone from URL" and log in to git when asked (Windows opens a browser; on a Mac use a Personal Access Token as the password).
    - **The agent window:** log in to Claude if asked, answer **"Yes, I trust this folder"**, then close that window. The agent keeps running.
-   - **Windows only:** if WSL gets installed, the script asks for a restart. After it, open "Ubuntu" from the Start menu once and create a Linux user, then run step 2 again.
-   - The setup also installs `~/.claude/agents/migration-worker.md` and copies `setup-migration-env.sh` to `~/.ftk/`, where the teammate runs it later. On Windows both go inside Ubuntu.
+   - **Windows:** if the script asks for "Update and restart", do that, then run step 2 again.
+   - The setup also installs `~/.claude/agents/migration-worker.md` (if the kit has it) and copies `setup-migration-env.sh` to `~/.ftk/`, where the teammate runs it later.
 4. Verify:
-   - macOS: `~/.ftk/ftk-remote status`
-   - Windows: `wsl -e /usr/local/bin/ftk-remote status`
-
-   Expected: `session: running`.
+   - macOS: `~/.ftk/ftk-remote status`. Expected: `session: running`.
+   - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\ftk\ftk-remote.ps1 status`. Expected: `claude:` with a path, and a `state:` line. The setup itself already checked that the agent answers.
 5. Done. The teammate is notified automatically. If the human wants, they can also send the `FTK|...` line from the clipboard.
 
 ## Migration
@@ -66,7 +68,7 @@ Leave out anything you don't want to allow (for example `git push`, so that push
 
 ## Windows in a virtual machine on a Mac (Parallels / VMware Fusion / UTM)
 - **Run the Windows host setup inside the VM**, as on a normal PC. Tailscale inside the VM gives the VM its own address, so the VM's network mode (NAT or bridged) does not matter.
-- **WSL:** on Apple Silicon the VM usually cannot run WSL2 (no nested virtualization). The setup detects the VM and uses **WSL1** instead, which needs no virtualization.
+- **No WSL needed:** on Windows the agents run natively (headless Claude Code), so nested virtualization does not matter.
 - **Keep the VM running:**
   - Do not suspend or pause it. Parallels: Configure > Options > Optimization, turn off "Pause Windows when possible". Battery: "Longer battery life" off.
   - Inside Windows, turn sleep off.
@@ -78,7 +80,7 @@ Leave out anything you don't want to allow (for example `git push`, so that push
   1. Keep the lid **open** and the charger connected. The screen may turn off; that is fine.
   2. Use clamshell mode: charger **and** an external display connected, then the lid can be closed.
   3. `sudo pmset -a disablesleep 1` keeps it awake even with the lid closed. Undo with `sudo pmset -a disablesleep 0`. Careful: a fanless MacBook Air in a bag gets hot, so turn it off before you pack the laptop.
-- **Run the host directly on macOS**, not in a Windows VM. On Apple Silicon a Windows VM would need WSL2 inside it (nested virtualization), and it costs a lot of RAM.
+- **macOS or a Windows VM:** both work. Running the host directly on macOS saves RAM; a Windows VM works too (no WSL needed).
 - **Optional isolation:** to keep the agents away from your personal files, create a separate macOS user for this work (System Settings > Users & Groups), log in as that user once, and run the setup there. Keep that user logged in (fast user switching is fine).
 - **Memory:** with 16 GB, 2–3 agents in parallel are fine; with 8 GB, use 1–2.
 
@@ -91,6 +93,7 @@ Leave out anything you don't want to allow (for example `git push`, so that push
 |---|---|---|
 | SSH key | delete the `ftk-...` line in `~/.ssh/authorized_keys` | delete it in `C:\ProgramData\ssh\administrators_authorized_keys` and `%USERPROFILE%\.ssh\authorized_keys` |
 | SSH server | System Settings → Sharing → Remote Login off | `Stop-Service sshd; Set-Service sshd -StartupType Disabled` |
-| Autostart | `launchctl bootout gui/$(id -u)/com.ftk.agent; rm ~/Library/LaunchAgents/com.ftk.agent.plist` | Task Scheduler → delete "FTK Agent Keepalive" |
-| Agent hooks | remove the `ftk-remote notify` entries from `~/.claude/settings.json` | same file inside Ubuntu |
+| Autostart | `launchctl bootout gui/$(id -u)/com.ftk.agent; rm ~/Library/LaunchAgents/com.ftk.agent.plist` | nothing runs in the background (headless) |
+| Agent hooks | remove the `ftk-remote notify` entries from `~/.claude/settings.json` | none |
+| Helper | `rm -rf ~/.ftk` | delete `C:\ProgramData\ftk` and `%USERPROFILE%\.ftk` |
 | Tailscale | admin console → machine → Share → revoke | same |

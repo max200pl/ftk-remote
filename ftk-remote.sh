@@ -302,6 +302,8 @@ json.dump(s, open(p, "w"), indent=2)
 print("hooks installed in " + p)
 PY
     ;;
+  setup-log)  # the host setup output (mac: Terminal shows it; nothing is kept)
+    echo "no setup log on a Mac host (the setup runs in Terminal)" ;;
   attach)     # read-only view
     exec tmux ${FTK_TMUX:+-L "$FTK_TMUX"} attach -r -t "$X" ;;
   drive)      # full control (you can type)

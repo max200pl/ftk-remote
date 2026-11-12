@@ -125,7 +125,7 @@ Host ftk
 EOF
 
 mkdir -p "$HOME/.ftk" "$BIN"
-if [ "$OS_R" = "windows" ]; then REMOTE="wsl -e /usr/local/bin/ftk-remote"; else REMOTE="~/.ftk/ftk-remote"; fi
+if [ "$OS_R" = "windows" ]; then REMOTE='powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\ftk\ftk-remote.ps1'; else REMOTE='~/.ftk/ftk-remote'; fi   # windows: native headless helper
 printf "FTK_REMOTE='%s'\nFTK_TOPIC='%s'\nFTK_NTFY='%s'\n" "$REMOTE" "$TOPIC" "$NTFY" > "$HOME/.ftk/client.conf"
 
 cat > "$BIN/ftk" <<'FTK_EOF'
@@ -145,6 +145,7 @@ case "$cmd" in
   peek)          num "${1:-}"; ssh ftk "$RR peek ${1:-}" ;;
   log)           num "${1:-}"; [[ -z "${2:-}" || "$2" = raw ]] || { echo "usage: ftk log [N] [raw]"; exit 2; }
                  ssh ftk "$RR log ${1:-30} ${2:-}" ;;
+  setup-log)     num "${1:-}"; ssh ftk "$RR setup-log ${1:-}" ;;
   wait)          num "${1:-}"; ssh ftk "$RR wait ${1:-}" ;;
   status|start|restart|git|lanes) ssh ftk "$RR $cmd" ;;
   say)           [ $# -gt 0 ] || { echo 'usage: ftk say "message"'; exit 2; }
@@ -188,6 +189,7 @@ ftk [-s LANE] COMMAND      (no -s = main agent; -s a1 = lane "a1")
   run "cmd"         run a command in the project folder, print output + [exit N]
   status            session / claude / state / project
   log [N] [raw]     last N transcript messages as text (raw = jsonl)
+  setup-log [N]     the host's setup log (Windows host)
   git               branch, changed files, last 10 commits
   checkout BR       switch the project to branch BR (refuses with uncommitted changes)
   start | restart   start / restart the agent session

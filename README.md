@@ -35,28 +35,28 @@ Normally the two of you use **different** Tailscale accounts (each person uses t
 - **Windows:** keep the `.cmd` and `.ps1` in the same folder and double-click the `.cmd`.
   - It runs PowerShell with `-ExecutionPolicy Bypass`. If Windows still blocks it, right-click the `.ps1` > Properties > **Unblock**.
   - The host script asks for Administrator rights.
-  - If WSL gets installed, the host script asks for a reboot. Run it again after the reboot.
 
 ## What the host gets
 - Tailscale and an SSH server. On Windows, port 22 is open only to Tailscale addresses (100.64.0.0/10).
 - The teammate's key in `authorized_keys`.
   - On Windows it also goes into `C:\ProgramData\ssh\administrators_authorized_keys`, with the ACL sshd requires.
-- The agent (`claude`) in a tmux session named `ftk`, started in the cloned repo. Where it lives:
-  - **Mac:** in the folder you choose.
-  - **Windows:** inside Ubuntu (WSL) under `~/Projects`, reachable in Explorer under `\\wsl.localhost\Ubuntu\home\<user>\Projects`.
+- The agent (`claude`):
+  - **Mac:** runs in a tmux session named `ftk`.
+  - **Windows:** runs natively in **headless** mode, with no WSL. Every `say` is one `claude -p --resume` turn in a detached process, and `wait`/`peek`/`log` read its JSON stream. Projects go to `%USERPROFILE%\Projects`, `run` uses Git Bash, and the helper is `C:\ProgramData\ftk\ftk-remote.ps1`.
+  - On Windows a permission prompt cannot be answered remotely. Allow tools in `.claude/settings.local.json`. `key C-c` stops a turn; other keys are explained, not sent.
 - Git login:
-  - **Windows:** git in WSL uses the Windows Git Credential Manager, so Azure DevOps/GitHub login happens in the browser.
+  - **Windows:** git uses the Git Credential Manager, so the Azure DevOps/GitHub login happens in the browser.
   - **Mac:** use a Personal Access Token as the password, or an SSH URL.
 - Sleep:
   - **Mac:** `caffeinate` keeps it awake while the session exists.
   - **Windows:** you can disable sleep on AC power.
 - Autostart at login:
   - **Mac:** a LaunchAgent `com.ftk.agent` starts the session at login, inside the GUI session, so Claude can read its Keychain login.
-  - **Windows:** a logon task called `FTK Agent Keepalive` starts the session and keeps WSL (and tmux) alive.
+  - **Windows:** nothing to keep alive: the agent runs only while it has a turn.
 - The host must be logged in to the computer (a locked screen is fine). If Claude ever asks to log in again, the host does it once with `~/.ftk/ftk-remote drive`.
 - A helper:
   - **Mac:** `~/.ftk/ftk-remote`
-  - **Windows:** `/usr/local/bin/ftk-remote` inside WSL
+  - **Windows:** `C:\ProgramData\ftk\ftk-remote.ps1` (PowerShell 5.1)
 
 ## Client commands (`ftk`)
 ```
@@ -112,7 +112,7 @@ ftk new-lane a1 migrate/s2-a1        # cut from local v2 when there is no origin
 # work back: ftk -s a1 run "git bundle create ~/.ftk/xfer/a1.bundle v2..migrate/s2-a1" ; ftk get a1.bundle a1.bundle
 ```
 - `ftk run` without a project runs in `~/.ftk/xfer`.
-- On a Windows host, `~` is the Ubuntu (WSL) home.
+- On a Windows host, `~` is `%USERPROFILE%`, and `ftk run` uses Git Bash.
 
 ### Branch safety
 - The clone is single-branch (`git clone --single-branch -b v2`). `checkout` and `new-lane` fetch only the exact branch they need, and never `--all`.
@@ -127,10 +127,8 @@ ftk new-lane a1 migrate/s2-a1        # cut from local v2 when there is no origin
 Nothing is auto-approved. The host can add an allowlist to the project's `.claude/settings.local.json` (see START-HERE.md).
 
 ## Troubleshooting
-- **Windows keeps saying "Restart needed" at step 2 (OpenSSH) or step 3 (WSL).** An unfinished Windows update blocks it. Use Start > Power > **Update and restart** (a plain restart is not enough), then run the script again. The script warns about this at the start.
-- **`status` says `session: NOT running` (Windows host).**
-  - WSL stopped and took tmux with it. Run `ftk start`, or check that the `FTK Agent Keepalive` task is running in Task Scheduler.
-  - The task runs elevated ("highest privileges"), like admin SSH sessions. Both must run at the same level, or they see different tmux servers.
+- **Windows keeps saying "Restart needed" at step 2 (OpenSSH).** An unfinished Windows update blocks it. Use Start > Power > **Update and restart** (a plain restart is not enough), then run the script again. The script warns about this at the start.
+- **`status` says `session: NOT running` (Mac host).** Run `ftk start`. The LaunchAgent starts it at login.
 - **`Permission denied (publickey)`.**
   - The host pasted the wrong key, or the key went into the wrong file.
   - Run the host script again and paste the content of the client's `~/.ssh/ftk_ed25519.pub`.
@@ -141,5 +139,5 @@ Nothing is auto-approved. The host can add an allowlist to the project's `.claud
 - `ftk-remote.sh` is the single source of the host helper.
 - After editing it, run `python3 embed.py` to copy it into both host scripts. The tests fail if the copies drift.
 - Run the tests with `bash tests/run.sh` (needs `tmux`).
-  - Everything runs in a temp HOME with a private tmux socket and stubbed `osascript`/`ssh`/`wsl`/`pbcopy`, so nothing real is touched.
+  - Everything runs in a temp HOME with a private tmux socket and stubbed `osascript`/`ssh`/`pbcopy` and a fake `claude`; the Windows helper runs under pwsh, so nothing real is touched.
   - The PowerShell tests download `pwsh` 7.4 to `tests/.cache` if it is missing.

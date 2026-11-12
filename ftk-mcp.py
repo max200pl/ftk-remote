@@ -49,6 +49,8 @@ TOOLS = [
     tool("ftk_log", "Last N transcript messages of the agent as plain text (assistant / tool_use / tool_result); raw=true gives jsonl.",
          {"lane": LANE, "n": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 30},
           "raw": {"type": "boolean", "default": False}}, read_only=True),
+    tool("ftk_setup_log", "Tail of the host's setup log (Windows host): follow the installation from the moment SSH is up.",
+         {"lines": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 60}}, read_only=True),
     tool("ftk_git", "Branch, changed files and last 10 commits of the agent's project.", {"lane": LANE}, read_only=True),
     tool("ftk_checkout", "Switch the agent's project to a branch (refused with uncommitted changes or for private branches).",
          {"lane": LANE, "branch": {"type": "string", "minLength": 1}}, ["branch"]),
@@ -97,6 +99,7 @@ def build(name, a):
     if name == "ftk_key":        return lane(a) + ["key", a["key"]], 60
     if name == "ftk_run":        return lane(a) + ["run", a["command"]], int(a.get("timeout_s", 900))
     if name == "ftk_log":        return lane(a) + ["log", str(int(a.get("n", 30)))] + (["raw"] if a.get("raw") else []), 60
+    if name == "ftk_setup_log":  return ["setup-log", str(int(a.get("lines", 60)))], 60
     if name == "ftk_git":        return lane(a) + ["git"], 60
     if name == "ftk_checkout":   return lane(a) + ["checkout", a["branch"]], 300
     if name == "ftk_lanes":      return ["lanes"], 60

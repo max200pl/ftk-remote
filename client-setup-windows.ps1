@@ -147,7 +147,7 @@ Host ftk
 if ($old -and -not $old.EndsWith("`n")) { $old += "`n" }
 Write-NoBom $cfg (($old + $block) -replace "`r`n", "`n")
 
-if ($os -eq 'windows') { $remote = 'wsl -e /usr/local/bin/ftk-remote' } else { $remote = '~/.ftk/ftk-remote' }
+if ($os -eq 'windows') { $remote = 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\ftk\ftk-remote.ps1' } else { $remote = '~/.ftk/ftk-remote' }
 if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 Write-NoBom (Join-Path $ftkDir 'client.conf') ((@{ remote = $remote; topic = $topic; ntfy = $ntfy } | ConvertTo-Json -Compress) + "`n")
 
@@ -171,6 +171,7 @@ $rest = @($a | Select-Object -Skip 1)
 $r1 = if ($rest.Count) { $rest[0] } else { '' }
 switch -Regex ($cmd) {
     '^peek$' { Num $r1; & $sshExe ftk "$R peek $r1"; break }
+    '^setup-log$' { Num $r1; & $sshExe ftk "$R setup-log $r1"; break }
     '^wait$' { Num $r1; & $sshExe ftk "$R wait $r1"; break }
     '^log$' {
         Num $r1; $n = if ($r1) { $r1 } else { '30' }
@@ -239,6 +240,7 @@ ftk [-s LANE] COMMAND      (no -s = main agent; -s a1 = lane "a1")
   run "cmd"         run a command in the project folder, print output + [exit N]
   status            session / claude / state / project
   log [N] [raw]     last N transcript messages as text (raw = jsonl)
+  setup-log [N]     the host's setup log (Windows host)
   git               branch, changed files, last 10 commits
   checkout BR       switch the project to branch BR (refuses with uncommitted changes)
   start | restart   start / restart the agent session

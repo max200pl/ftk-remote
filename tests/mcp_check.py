@@ -23,7 +23,7 @@ rpc("notifications/initialized", notify=True)
 check("mcp notification gets no reply (next reply is ping)", rpc("ping")["result"] == {})
 tl = rpc("tools/list")["result"]["tools"]
 names = {t["name"] for t in tl}
-check("mcp tools/list: 18 tools with schemas", len(tl) == 18 and all("inputSchema" in t for t in tl), sorted(names))
+check("mcp tools/list: 19 tools with schemas", len(tl) == 19 and all("inputSchema" in t for t in tl), sorted(names))
 t, e = call("ftk_status"); check("mcp ftk_status", "session: running" in t and not e, t)
 t, e = call("ftk_say", lane="a1", text="mcp привет\nвторая"); check("mcp ftk_say (lane a1)", "sent" in t and not e, t)
 import time; time.sleep(1.5)
