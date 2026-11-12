@@ -54,12 +54,13 @@ $Title = 'FTK Remote - Host setup (Windows)'
 $Owner = New-Object Windows.Forms.Form -Property @{ TopMost = $true }
 
 function Step([string]$m) {
+    Write-Host "[dialog] $m"
     if ($Auto) { Write-Host "== $($m.Split([char]10)[0])"; return }
     $r = [Windows.Forms.MessageBox]::Show($Owner, $m, $Title, 'OKCancel', 'Information')
     if ($r -ne 'OK') { Write-Host 'Cancelled.'; exit 1 }
 }
-function Info([string]$m) { if ($Auto) { Write-Host "-- $m"; return }; [void][Windows.Forms.MessageBox]::Show($Owner, $m, $Title, 'OK', 'Information') }
-function YesNo([string]$m) { if ($Auto) { Write-Host "?? $($m.Split([char]10)[0]) -> Yes (auto)"; return $true }; return ([Windows.Forms.MessageBox]::Show($Owner, $m, $Title, 'YesNo', 'Question') -eq 'Yes') }
+function Info([string]$m) { Write-Host "[dialog] $m"; if ($Auto) { Write-Host "-- $m"; return }; [void][Windows.Forms.MessageBox]::Show($Owner, $m, $Title, 'OK', 'Information') }
+function YesNo([string]$m) { Write-Host "[dialog yes/no] $m"; if ($Auto) { Write-Host "?? $($m.Split([char]10)[0]) -> Yes (auto)"; return $true }; return ([Windows.Forms.MessageBox]::Show($Owner, $m, $Title, 'YesNo', 'Question') -eq 'Yes') }
 function Ask([string]$m, [string]$def) {
     if ($Auto) { if ([string]::IsNullOrWhiteSpace($def)) { Write-Host "ERROR (auto): no default for: $($m.Split([char]10)[0])"; exit 1 }; return $def.Trim() }
     $r = [Microsoft.VisualBasic.Interaction]::InputBox($m, $Title, $def)
@@ -156,7 +157,8 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
     $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' } | Select-Object -First 1
     $res = Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop
     if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
-        if ($res.RestartNeeded -or (RebootPending)) {
+        # no sshd after the install = Windows did not apply it (pending update / servicing), even when no flag says so
+        if ($true) {
             Info @"
 Step 2/8 - Restart needed
 
@@ -169,7 +171,6 @@ OpenSSH Server is installed, but Windows needs a restart to finish it
 "@
             exit 0
         }
-        throw 'OpenSSH Server was installed but the sshd service does not exist. Restart the PC and run the script again.'
     }
 }
 Set-Service sshd -StartupType Automatic -ErrorAction Stop
