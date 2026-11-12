@@ -575,6 +575,19 @@ A Terminal window will open with the agent session.
 Click OK to open it."
 osascript -e 'tell application "Terminal" to do script "~/.ftk/ftk-remote drive"' -e 'tell application "Terminal" to activate' >/dev/null
 
+# ---------- laptop: the lid puts the Mac to sleep ----------
+if pmset -g batt 2>/dev/null | grep -q 'InternalBattery'; then
+  info "This is a MacBook - important:
+
+Closing the LID puts the Mac to sleep: the agents stop and your teammate loses the connection (keeping it awake while idle is already handled).
+
+- Keep the lid open and the charger connected (the screen may turn off), or
+- use an external display + charger (then the lid may be closed), or
+- 'sudo pmset -a disablesleep 1' in Terminal (undo: 'sudo pmset -a disablesleep 0'; do not leave it on in a bag).
+
+See START-HERE.md, section 'On a MacBook'."
+fi
+
 # ---------- Step 8: connection line ----------
 LINE="FTK|$TS_IP|$(whoami)|mac"
 printf '%s' "$LINE" | pbcopy

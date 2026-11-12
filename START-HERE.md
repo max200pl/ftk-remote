@@ -61,6 +61,15 @@ The agents run with normal Claude Code permissions, and nothing is auto-approved
 ```
 Leave out anything you don't want to allow (for example `git push`, so that pushes still ask).
 
+## On a MacBook (laptop)
+- **The lid matters.** A closed lid puts the Mac to sleep, which stops the agents and drops the connection. The setup's `caffeinate` only prevents *idle* sleep, not lid sleep. Pick one:
+  1. Keep the lid **open** and the charger connected. The screen may turn off; that is fine.
+  2. Use clamshell mode: charger **and** an external display connected, then the lid can be closed.
+  3. `sudo pmset -a disablesleep 1` keeps it awake even with the lid closed. Undo with `sudo pmset -a disablesleep 0`. Careful: a fanless MacBook Air in a bag gets hot, so turn it off before you pack the laptop.
+- **Run the host directly on macOS**, not in a Windows VM. On Apple Silicon a Windows VM would need WSL2 inside it (nested virtualization), and it costs a lot of RAM.
+- **Optional isolation:** to keep the agents away from your personal files, create a separate macOS user for this work (System Settings > Users & Groups), log in as that user once, and run the setup there. Keep that user logged in (fast user switching is fine).
+- **Memory:** with 16 GB, 2–3 agents in parallel are fine; with 8 GB, use 1–2.
+
 ## Keep in mind
 - Keep the computer on, logged in (a locked screen is fine) and connected to Tailscale.
 - The agent starts again automatically when you log in.
