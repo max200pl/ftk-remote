@@ -127,6 +127,7 @@ ftk new-lane a1 migrate/s2-a1        # cut from local v2 when there is no origin
 Nothing is auto-approved. The host can add an allowlist to the project's `.claude/settings.local.json` (see START-HERE.md).
 
 ## Troubleshooting
+- **Windows keeps saying "Restart needed" at step 2 (OpenSSH) or step 3 (WSL).** An unfinished Windows update blocks it. Use Start > Power > **Update and restart** (a plain restart is not enough), then run the script again. The script warns about this at the start.
 - **`status` says `session: NOT running` (Windows host).**
   - WSL stopped and took tmux with it. Run `ftk start`, or check that the `FTK Agent Keepalive` task is running in Task Scheduler.
   - The task runs elevated ("highest privileges"), like admin SSH sessions. Both must run at the same level, or they see different tmux servers.

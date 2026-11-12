@@ -90,6 +90,23 @@ If WSL is not installed yet, the PC must restart once and you run this script ag
 Have the SSH key your teammate sent you ready. Click OK to start.
 "@
 
+# ---------- preflight: unfinished Windows updates break OpenSSH / WSL installs ----------
+Mark 'Preflight'
+if (RebootPending) {
+    $go = YesNo @"
+Windows has unfinished updates waiting for a restart.
+
+While they are pending, OpenSSH Server and WSL often cannot be installed
+(the script would then keep asking for a restart).
+
+Recommended: click NO, then Start -> Power -> 'Update and restart',
+and run this script again after Windows has finished updating.
+
+Continue anyway? (YES = continue now, NO = stop and update first)
+"@
+    if (-not $go) { Write-Host 'Stopped: finish Windows updates first (Start -> Power -> Update and restart).'; exit 0 }
+}
+
 # ---------- Step 1: Tailscale ----------
 Mark 'Step 1/8 Tailscale'
 $ts = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
@@ -131,9 +148,10 @@ if (-not (Get-Service sshd -ErrorAction SilentlyContinue)) {
 Step 2/8 - Restart needed
 
 OpenSSH Server is installed, but Windows needs a restart to finish it
-(often because a Windows update is pending as well).
+(usually a pending Windows update must be applied first).
 
-1. Restart the PC.
+1. Start -> Power -> 'Update and restart' (if it only shows 'Restart', use that).
+   A plain restart is NOT enough while an update is pending.
 2. Run this script (host-setup-windows.cmd) again - it continues where it stopped.
 "@
             exit 0

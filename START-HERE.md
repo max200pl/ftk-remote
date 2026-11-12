@@ -9,6 +9,9 @@ A teammate wants to use this computer for Claude Code agents working on a projec
 - **tmux + Claude Code:** the agent runs in a session called `ftk` inside the cloned repo. The repo is cloned **single-branch** (`v2` only). The teammate can add more agents ("lanes"), each in its own git worktree.
 - **Notifications:** ntfy pushes to the teammate, sent when setup is done, when the agent finishes a turn, and when it needs input.
 
+## Windows: finish pending updates first
+If Windows shows "Update and restart" in the Power menu, do that **before** the setup. While an update is pending, OpenSSH Server and WSL often cannot be installed, and the script keeps asking for a restart. A plain restart does not apply the update.
+
 ## Accounts: whose login goes where
 - **Tailscale:** log in with **your own** account. The teammate is in a different tailnet, so share this machine with them:
   1. Open https://login.tailscale.com/admin/machines.
