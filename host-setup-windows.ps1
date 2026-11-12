@@ -230,7 +230,7 @@ $remote = @'
 # The client calls:  powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\ftk\ftk-remote.ps1 [-s lane] <cmd> [arg...]
 # Arguments are plain words or base64 (no quoting problems). Windows PowerShell 5.1 compatible, ASCII only.
 $ErrorActionPreference = 'Continue'
-$FtkVersion = '2026.11.12.4'   # bump on every release; hosts update themselves from GitHub
+$FtkVersion = '2026.11.12.5'   # bump on every release; hosts update themselves from GitHub
 $FtkRaw = if ($env:FTK_UPDATE_URL) { $env:FTK_UPDATE_URL } else { 'https://raw.githubusercontent.com/max200pl/ftk-remote/main/ftk-remote.ps1' }
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false) } catch { }
 $U8 = New-Object Text.UTF8Encoding($false)

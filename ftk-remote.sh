@@ -4,7 +4,7 @@
 # Arguments are always plain words or base64, so no quoting problems
 # across PowerShell -> ssh -> cmd -> wsl -> bash.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-FTK_VERSION="2026.11.12.4"   # bump on every release; hosts update themselves from GitHub
+FTK_VERSION="2026.11.12.5"   # bump on every release; hosts update themselves from GitHub
 FTK_RAW="${FTK_UPDATE_URL:-https://raw.githubusercontent.com/max200pl/ftk-remote/main/ftk-remote.sh}"
 
 # ---- session (lane) selection: no -s = main session "ftk", -s a1 = "ftk-a1"
