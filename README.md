@@ -126,6 +126,34 @@ ftk new-lane a1 migrate/s2-a1        # cut from local v2 when there is no origin
 ### Permissions
 Nothing is auto-approved. The host can add an allowlist to the project's `.claude/settings.local.json` (see START-HERE.md).
 
+## Without Tailscale: Microsoft Dev Tunnels
+
+When Tailscale is not an option (for example, a company tailnet that needs admin approval), the
+host can be reached through a Microsoft Dev Tunnel with access limited to your organization.
+Both sides sign in with their work Microsoft account. SSH stays key-only, and everything else
+(`ftk`, ftk-bridge) works unchanged.
+
+Host (Windows), after the host setup has installed the SSH server:
+
+    winget install Microsoft.devtunnel
+    devtunnel user login                      # work account
+    devtunnel create ftk-<name>
+    devtunnel port create ftk-<name> -p 22
+    devtunnel access create ftk-<name> --tenant
+    devtunnel host ftk-<name>                 # keep it running
+
+Client (Mac):
+
+    brew install --cask devtunnel && devtunnel user login
+    ftk devtunnel <tunnel-id> <host user>     # writes ssh host "ftk-dt" and tests it
+    ftk -H ftk-dt status                      # or: export FTK_HOST=ftk-dt
+    ftk devtunnel stop                        # stop the local tunnel connections
+
+`~/.ftk/dt-proxy.sh` is the ssh ProxyCommand: it keeps one `devtunnel connect` running and pipes
+ssh into its local port. The Tailscale host `ftk` stays as it is; `-H`/`FTK_HOST` picks the host.
+For Claude Code, register a second bridge with `-e FTK_HOST=ftk-dt` (the command prints it).
+Ask IT before running a tunnel on a company computer.
+
 ## Security model
 - **Who can get in:** only through Tailscale (the host shares one machine), and only with the SSH key from `teammate.pub`.
   - Windows: the SSH server is key-only (passwords off), and port 22 is open to Tailscale addresses only.

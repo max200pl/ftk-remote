@@ -132,6 +132,11 @@ cat > "$BIN/ftk" <<'FTK_EOF'
 #!/bin/bash
 # ftk - talk to the Claude Code agent(s) on the teammate's machine.
 source "$HOME/.ftk/client.conf"
+H="${FTK_HOST:-ftk}"             # ssh host alias; -H or FTK_HOST picks another host (e.g. a Dev Tunnel one)
+if [ "${1:-}" = "-H" ]; then
+  [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || { echo "usage: ftk -H <ssh host alias> <command>"; exit 2; }
+  H="$2"; shift 2
+fi
 SEL=""
 if [ "${1:-}" = "-s" ]; then
   [[ "${2:-}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || { echo "usage: ftk -s <lane> <command>"; exit 2; }
@@ -143,41 +148,41 @@ b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 num() { [[ -z "${1:-}" || "$1" =~ ^[0-9]+$ ]] || { echo "number expected"; exit 2; }; }
 cmd="${1:-help}"; shift 2>/dev/null
 case "$cmd" in
-  peek)          num "${1:-}"; ssh ftk "$RR peek ${1:-}" ;;
+  peek)          num "${1:-}"; ssh "$H" "$RR peek ${1:-}" ;;
   log)           num "${1:-}"; [[ -z "${2:-}" || "$2" = raw ]] || { echo "usage: ftk log [N] [raw]"; exit 2; }
-                 ssh ftk "$RR log ${1:-30} ${2:-}" ;;
-  monitor)       ssh ftk "$FTK_REMOTE monitor" ;;
-  show)          ssh ftk "$FTK_REMOTE show-monitor" ;;
-  version)       echo "client kit $(cat "$HOME/.ftk/kit-version" 2>/dev/null || echo '?')"; printf 'host helper '; ssh ftk "$FTK_REMOTE version" ;;
-  update-host)   ssh ftk "$FTK_REMOTE update" ;;
-  rollback-host) ssh ftk "$FTK_REMOTE rollback" ;;
-  setup-log)     num "${1:-}"; ssh ftk "$RR setup-log ${1:-}" ;;
-  wait)          num "${1:-}"; ssh ftk "$RR wait ${1:-}" ;;
-  status|start|restart|git|lanes) ssh ftk "$RR $cmd" ;;
+                 ssh "$H" "$RR log ${1:-30} ${2:-}" ;;
+  monitor)       ssh "$H" "$FTK_REMOTE monitor" ;;
+  show)          ssh "$H" "$FTK_REMOTE show-monitor" ;;
+  version)       echo "client kit $(cat "$HOME/.ftk/kit-version" 2>/dev/null || echo '?')"; printf 'host helper '; ssh "$H" "$FTK_REMOTE version" ;;
+  update-host)   ssh "$H" "$FTK_REMOTE update" ;;
+  rollback-host) ssh "$H" "$FTK_REMOTE rollback" ;;
+  setup-log)     num "${1:-}"; ssh "$H" "$RR setup-log ${1:-}" ;;
+  wait)          num "${1:-}"; ssh "$H" "$RR wait ${1:-}" ;;
+  status|start|restart|git|lanes) ssh "$H" "$RR $cmd" ;;
   say)           [ $# -gt 0 ] || { echo 'usage: ftk say "message"'; exit 2; }
-                 ssh ftk "$RR say $(b64 "$*")" ;;
+                 ssh "$H" "$RR say $(b64 "$*")" ;;
   run)           [ $# -gt 0 ] || { echo 'usage: ftk run "command"'; exit 2; }
-                 ssh ftk "$RR run $(b64 "$*")" ;;
+                 ssh "$H" "$RR run $(b64 "$*")" ;;
   key)           [[ "${1:-}" =~ ^[A-Za-z0-9-]+$ ]] || { echo "usage: ftk key Enter|Escape|Up|Down|1|2|y|n|C-c"; exit 2; }
-                 ssh ftk "$RR key $1" ;;
+                 ssh "$H" "$RR key $1" ;;
   checkout)      [ -n "${1:-}" ] || { echo "usage: ftk checkout <branch>"; exit 2; }
-                 ssh ftk "$RR checkout $(b64 "$1")" ;;
+                 ssh "$H" "$RR checkout $(b64 "$1")" ;;
   setproject)    [ -n "${1:-}" ] || { echo "usage: ftk [-s LANE] setproject <host path, ~/ allowed>"; exit 2; }
-                 ssh ftk "$RR setproject $(b64 "$1")" ;;
+                 ssh "$H" "$RR setproject $(b64 "$1")" ;;
   put)           [ -f "${1:-}" ] && [[ "${2:-}" =~ ^[A-Za-z0-9._/-]+$ && "$2" != /* && "$2" != *..* ]] || { echo "usage: ftk put <local file> <path under ~/.ftk/xfer>"; exit 2; }
                  echo "local $(wc -c < "$1" | tr -d ' ') bytes sha256 $(shasum -a 256 "$1" | cut -d' ' -f1)"
-                 ssh $TO ftk "$RR xfer-prep $(b64 "$2")" >/dev/null || { echo "put failed (prepare)"; exit 1; }
-                 scp -q $TO "$1" "ftk:.ftk/xfer/$2" || { echo "put failed (scp)"; exit 1; }
-                 ssh $TO ftk "$RR xfer-hash $(b64 "$2")" ;;
+                 ssh $TO "$H" "$RR xfer-prep $(b64 "$2")" >/dev/null || { echo "put failed (prepare)"; exit 1; }
+                 scp -q $TO "$1" "$H:.ftk/xfer/$2" || { echo "put failed (scp)"; exit 1; }
+                 ssh $TO "$H" "$RR xfer-hash $(b64 "$2")" ;;
   get)           [[ "${1:-}" =~ ^[A-Za-z0-9._/-]+$ && "$1" != /* && "$1" != *..* ]] && [ -n "${2:-}" ] || { echo "usage: ftk get <path under ~/.ftk/xfer> <local file>"; exit 2; }
-                 scp -q $TO "ftk:.ftk/xfer/$1" "$2" || { echo "get failed"; exit 1; }
+                 scp -q $TO "$H:.ftk/xfer/$1" "$2" || { echo "get failed"; exit 1; }
                  echo "saved $2 $(wc -c < "$2" | tr -d ' ') bytes sha256 $(shasum -a 256 "$2" | cut -d' ' -f1)" ;;
-  xfer)          ssh ftk "$RR xfer" ;;
+  xfer)          ssh "$H" "$RR xfer" ;;
   new-lane)      [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] && [ -n "${2:-}" ] || { echo "usage: ftk new-lane <name> <branch>"; exit 2; }
-                 ssh ftk "$FTK_REMOTE new-lane $1 $(b64 "$2")" ;;
-  watch)         echo "Read-only view. Detach: Ctrl+B then D"; ssh -t ftk "$RR attach" ;;
-  drive)         echo "FULL control. Detach: Ctrl+B then D"; ssh -t ftk "$RR drive" ;;
-  shell)         ssh ftk ;;
+                 ssh "$H" "$FTK_REMOTE new-lane $1 $(b64 "$2")" ;;
+  watch)         echo "Read-only view. Detach: Ctrl+B then D"; ssh -t "$H" "$RR attach" ;;
+  drive)         echo "FULL control. Detach: Ctrl+B then D"; ssh -t "$H" "$RR drive" ;;
+  shell)         ssh "$H" ;;
   events)        [ -n "${FTK_TOPIC:-}" ] || { echo "no ntfy topic configured"; exit 1; }
                  since="${1:-1h}"; [[ "$since" =~ ^([0-9]+[smhd]|all)$ ]] || { echo "usage: ftk events [30m|2h|1d|all]"; exit 2; }
                  curl -fsS -m 15 "$FTK_NTFY/$FTK_TOPIC/json?poll=1&since=$since" | python3 -c '
@@ -187,8 +192,46 @@ for l in sys.stdin:
     except ValueError: continue
     if e.get("event") == "message":
         print(time.strftime("%H:%M:%S", time.localtime(e["time"])), "|", e.get("title", ""), "|", e.get("message", ""))' ;;
+  devtunnel)     # Microsoft Dev Tunnels instead of Tailscale (company sign-in, tenant-only access)
+                 if [ "${1:-}" = "stop" ]; then
+                   for f in "$HOME"/.ftk/dt/*/pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && echo "stopped $(basename "$(dirname "$f")")"; rm -f "$f"; done; exit 0
+                 fi
+                 id="${1:-}"; ru="${2:-}"; al="${3:-ftk-dt}"
+                 [[ "$id" =~ ^[a-z0-9][a-z0-9.-]{0,80}$ && "$ru" =~ ^[A-Za-z0-9._-]{1,64}$ && "$al" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] ||
+                   { echo "usage: ftk devtunnel <tunnel-id> <host user> [alias, default ftk-dt]   |   ftk devtunnel stop"; exit 2; }
+                 [ "$al" != ftk ] || { echo "alias 'ftk' is the Tailscale host - pick another alias (default ftk-dt)"; exit 2; }
+                 command -v "${FTK_DEVTUNNEL:-devtunnel}" >/dev/null || { echo "devtunnel not installed: brew install --cask devtunnel, then: devtunnel user login"; exit 1; }
+                 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG"
+                 awk -v b="# >>> ftk-dt $al >>>" -v e="# <<< ftk-dt $al <<<" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+                 cat >> "$CFG" <<EOF
+# >>> ftk-dt $al >>>
+Host $al
+  HostName $id
+  HostKeyAlias $al
+  User $ru
+  IdentityFile ~/.ssh/ftk_ed25519
+  IdentitiesOnly yes
+  IgnoreUnknown UseKeychain
+  UseKeychain yes
+  AddKeysToAgent yes
+  ServerAliveInterval 30
+  ProxyCommand $HOME/.ftk/dt-proxy.sh $id
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%C
+  ControlPersist 10m
+# <<< ftk-dt $al <<<
+EOF
+                 chmod 600 "$CFG"
+                 echo "ssh host '$al' -> dev tunnel $id (user $ru). Testing..."
+                 if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "$al" "$FTK_REMOTE status"; then
+                   echo
+                   echo "Connected. Use:  ftk -H $al status   (or export FTK_HOST=$al)"
+                   echo "Claude Code:     claude mcp add ftk-$al -s user -e FTK_BIN=$HOME/.local/bin/ftk -e FTK_HOST=$al -- python3 $HOME/.ftk/ftk-mcp.py"
+                 else
+                   echo "Not connected yet. Check: the host runs 'devtunnel host <id>', you ran 'devtunnel user login' (work account), the host's SSH has your key."; exit 1
+                 fi ;;
   *) cat <<'H'
-ftk [-s LANE] COMMAND      (no -s = main agent; -s a1 = lane "a1")
+ftk [-H HOST] [-s LANE] COMMAND   (no -s = main agent; -s a1 = lane "a1"; -H = ssh alias, default ftk)
   peek [N]          last N lines of the agent screen (default 200)
   say "text"        type a message to the agent and press Enter
   wait [SEC]        block until the agent finished its turn / needs input (default 600 s)
@@ -214,11 +257,40 @@ ftk version                client kit + host helper versions
 ftk update-host            update the host helper from GitHub now (signed releases only)
 ftk rollback-host          go back to the previous host helper
 ftk events [1h]            ntfy notifications: ready / turn finished / needs you
+ftk devtunnel ID USER [ALIAS]   reach a host through a Microsoft Dev Tunnel (alias default ftk-dt)
+ftk devtunnel stop         stop the local dev tunnel connections
 H
   ;;
 esac
 FTK_EOF
 chmod +x "$BIN/ftk"
+
+cat > "$HOME/.ftk/dt-proxy.sh" <<'DTP_EOF'
+#!/bin/bash
+# ssh ProxyCommand: reach the host's sshd through a Microsoft Dev Tunnel.
+# Keeps one 'devtunnel connect <id>' running in the background and pipes ssh into its local port.
+id="${1:-}"
+[[ "$id" =~ ^[a-z0-9][a-z0-9.-]{0,80}$ ]] || { echo "dt-proxy: bad tunnel id" >&2; exit 2; }
+DT="${FTK_DEVTUNNEL:-devtunnel}"
+command -v "$DT" >/dev/null || { echo "dt-proxy: devtunnel not installed (brew install --cask devtunnel)" >&2; exit 1; }
+d="$HOME/.ftk/dt/$id"; mkdir -p "$d"
+port()  { sed -n 's/.*Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) to host port 22\..*/\1/p' "$d/connect.log" 2>/dev/null | tail -1; }
+alive() { [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; }
+for _ in $(seq 1 150); do mkdir "$d/lock" 2>/dev/null && break; sleep 0.2; done   # one starter at a time
+trap 'rmdir "$d/lock" 2>/dev/null' EXIT
+if ! alive || [ -z "$(port)" ]; then
+  alive && kill "$(cat "$d/pid")" 2>/dev/null
+  : > "$d/connect.log"
+  nohup "$DT" connect "$id" > "$d/connect.log" 2>&1 < /dev/null &
+  echo $! > "$d/pid"
+  for _ in $(seq 1 150); do [ -n "$(port)" ] && break; alive || break; sleep 0.2; done
+fi
+rmdir "$d/lock" 2>/dev/null
+p="$(port)"
+[ -n "$p" ] || { echo "dt-proxy: tunnel $id not reachable (is 'devtunnel host' running on the host? are you logged in?):" >&2; tail -5 "$d/connect.log" >&2; exit 1; }
+exec nc 127.0.0.1 "$p"
+DTP_EOF
+chmod +x "$HOME/.ftk/dt-proxy.sh"
 case ":$PATH:" in *":$BIN:"*) ;; *)
   grep -q 'ftk: add ~/.local/bin' "$HOME/.zshrc" 2>/dev/null ||
     printf '\n# ftk: add ~/.local/bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zshrc" ;;

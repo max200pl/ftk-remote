@@ -431,6 +431,39 @@ check "ssh received plain '<helper> say <base64>' (no quotes)" bash -c "grep -E 
 check "turn end posts to ntfy" bash -c "curl -fsS '$FTK_NTFY_URL/$FTK_NTFY_TOPIC/json?poll=1' | grep -q 'finished a turn'" || true
 
 # ======================================================================
+section "5b. Dev Tunnels mode (-H alias, ftk devtunnel, dt-proxy)"
+mkdir -p "$T/dtstubs"
+cat > "$T/dtstubs/devtunnel" <<'EOF'
+#!/bin/bash
+echo "devtunnel $*" >> "$FTK_TEST_DIR/devtunnel.log"
+[ "$1" = connect ] || exit 0
+echo "SSH: Forwarding from 127.0.0.1:55123 to host port 22."
+exec sleep 300
+EOF
+printf '#!/bin/bash\necho "NC $*"\n' > "$T/dtstubs/nc"
+chmod +x "$T/dtstubs/"*
+check "devtunnel: bad tunnel id refused" bash -c "! FTK_DEVTUNNEL='$T/dtstubs/devtunnel' '$FTK' devtunnel 'x;y' tester >/dev/null"
+check "devtunnel: alias 'ftk' refused (keeps the Tailscale host)" bash -c "! FTK_DEVTUNNEL='$T/dtstubs/devtunnel' '$FTK' devtunnel abc.eun1 tester ftk >/dev/null"
+DOUT="$(FTK_DEVTUNNEL="$T/dtstubs/devtunnel" "$FTK" devtunnel abc-tun.eun1 tester 2>&1)"
+echo "$DOUT" | grep -q 'Connected. Use:  ftk -H ftk-dt' && ok "devtunnel: writes host ftk-dt and tests it" || bad "devtunnel setup" "$DOUT"
+FTK_DEVTUNNEL="$T/dtstubs/devtunnel" "$FTK" devtunnel abc-tun.eun1 tester >/dev/null 2>&1
+[ "$(grep -c '^Host ftk-dt$' "$HOME/.ssh/config")" = 1 ] && ok "devtunnel: re-run keeps one block" || bad "devtunnel block count" "$(cat "$HOME/.ssh/config")"
+check "devtunnel: Tailscale 'Host ftk' block untouched" bash -c "grep -q '^Host ftk$' '$HOME/.ssh/config' && grep -q 'HostName 100.64.0.10' '$HOME/.ssh/config'"
+check "devtunnel: ProxyCommand + key-only identity" bash -c "grep -q 'ProxyCommand $HOME/.ftk/dt-proxy.sh abc-tun.eun1' '$HOME/.ssh/config' && grep -A4 '^Host ftk-dt' '$HOME/.ssh/config' | grep -q 'User tester'"
+check "-H ftk-dt: commands go to that alias" bash -c "'$FTK' -H ftk-dt status | grep -q 'headless, Windows' && tail -1 '$T/ssh.log' | grep -q '^ftk-dt powershell'"
+check "FTK_HOST=ftk-dt works like -H" bash -c "FTK_HOST=ftk-dt '$FTK' git >/dev/null; tail -1 '$T/ssh.log' | grep -q '^ftk-dt '"
+check "-H rejects a bad alias" bash -c "! '$FTK' -H 'a;b' status"
+check "put/get over -H use the alias in scp" bash -c "'$FTK' -H ftk-dt put '$T/blob.bin' dt/blob.bin >/dev/null; grep -q '^scp .* ftk-dt:.ftk/xfer/dt/blob.bin' '$T/ssh.log'"
+check "dt-proxy installed" test -x "$HOME/.ftk/dt-proxy.sh"
+POUT="$(PATH="$T/dtstubs:$PATH" "$HOME/.ftk/dt-proxy.sh" abc-tun.eun1 2>&1)"
+[ "$POUT" = "NC 127.0.0.1 55123" ] && ok "dt-proxy: starts devtunnel connect, pipes ssh to its local port" || bad "dt-proxy first call" "$POUT"
+PATH="$T/dtstubs:$PATH" "$HOME/.ftk/dt-proxy.sh" abc-tun.eun1 >/dev/null 2>&1
+[ "$(grep -c '^devtunnel connect abc-tun.eun1$' "$T/devtunnel.log")" = 1 ] && ok "dt-proxy: second ssh reuses the running connection" || bad "dt-proxy reuse" "$(cat "$T/devtunnel.log")"
+check "dt-proxy: bad id refused" bash -c "! PATH='$T/dtstubs:$PATH' '$HOME/.ftk/dt-proxy.sh' 'a;b' 2>/dev/null"
+check "devtunnel stop kills the connection" bash -c "pid=\$(cat '$HOME/.ftk/dt/abc-tun.eun1/pid'); '$FTK' devtunnel stop | grep -q 'stopped abc-tun.eun1' && ! kill -0 \$pid 2>/dev/null"
+check "help lists devtunnel and -H" bash -c "'$FTK' help | grep -q 'ftk devtunnel ID USER' && '$FTK' help | grep -q '\-H HOST'"
+
+# ======================================================================
 section "6. PowerShell scripts"
 if [ -z "$PWSH" ]; then
   bad "pwsh available" "could not get PowerShell - PS tests skipped"
